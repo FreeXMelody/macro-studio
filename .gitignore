@@ -1,0 +1,21 @@
+# Runtime state
+macro_config.json
+playlist.json
+config.json
+image_templates/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

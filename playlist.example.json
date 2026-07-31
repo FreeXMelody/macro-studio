@@ -1,0 +1,19 @@
+{
+  "active_song_group": "默认",
+  "song_groups": [
+    {
+      "name": "默认",
+      "step_preset": "",
+      "songs": [
+        {
+          "title": "示例歌曲",
+          "keyword": "示例搜索词",
+          "duration_seconds": 30,
+          "buffer_seconds": 5,
+          "enabled": true,
+          "step_preset": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "window_hint": "目标窗口标题关键词",
+  "focus_window": true,
+  "playback_loop": false,
+  "playback_random": false,
+  "active_point_group": "默认",
+  "point_groups": [
+    {
+      "name": "默认",
+      "points": [
+        { "name": "搜索框", "x": 0, "y": 0 },
+        { "name": "搜索按钮", "x": 0, "y": 0 },
+        { "name": "第一个结果", "x": 0, "y": 0 },
+        { "name": "播放按钮", "x": 0, "y": 0 }
+      ]
+    }
+  ],
+  "points": [
+    { "name": "搜索框", "x": 0, "y": 0 },
+    { "name": "搜索按钮", "x": 0, "y": 0 },
+    { "name": "第一个结果", "x": 0, "y": 0 },
+    { "name": "播放按钮", "x": 0, "y": 0 }
+  ],
+  "steps": [
+    { "name": "点击搜索框", "kind": "click", "target": "搜索框", "value": "", "enabled": true, "wait_after": "" },
+    { "name": "输入搜索词", "kind": "paste", "target": "", "value": "{keyword}", "enabled": true, "wait_after": "" },
+    { "name": "点击搜索按钮", "kind": "click", "target": "搜索按钮", "value": "", "enabled": true, "wait_after": "2" },
+    { "name": "打开第一个结果", "kind": "click", "target": "第一个结果", "value": "", "enabled": true, "wait_after": "" },
+    { "name": "等待本首结束", "kind": "wait", "target": "", "value": "{total}", "enabled": true, "wait_after": "" }
+  ],
+  "image_targets": [],
+  "active_step_preset": "",
+  "step_presets": []
+}
