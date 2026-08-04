@@ -9,6 +9,8 @@ VK_CONTROL = 0x11
 VK_A = 0x41
 VK_V = 0x56
 VK_RETURN = 0x0D
+VK_SHIFT = 0x10
+VK_MENU = 0x12
 VK_F8 = 0x77
 VK_F9 = 0x78
 GMEM_MOVEABLE = 0x0002
@@ -28,6 +30,61 @@ GlobalUnlock.argtypes = [ctypes.c_void_p]
 GlobalFree.argtypes = [ctypes.c_void_p]
 user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
 user32.SetClipboardData.restype = ctypes.c_void_p
+KEY_ALIASES = {
+    "backspace": 0x08,
+    "tab": 0x09,
+    "enter": VK_RETURN,
+    "return": VK_RETURN,
+    "shift": VK_SHIFT,
+    "ctrl": VK_CONTROL,
+    "control": VK_CONTROL,
+    "alt": VK_MENU,
+    "esc": 0x1B,
+    "escape": 0x1B,
+    "space": 0x20,
+    "pageup": 0x21,
+    "pagedown": 0x22,
+    "end": 0x23,
+    "home": 0x24,
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "insert": 0x2D,
+    "delete": 0x2E,
+    "del": 0x2E,
+    "plus": 0xBB,
+    "minus": 0xBD,
+    "comma": 0xBC,
+    "period": 0xBE,
+    "slash": 0xBF,
+    "semicolon": 0xBA,
+    "quote": 0xDE,
+    "backtick": 0xC0,
+    "[": 0xDB,
+    "]": 0xDD,
+    "\\": 0xDC,
+}
+for index in range(1, 13):
+    KEY_ALIASES[f"f{index}"] = 0x6F + index
+for index in range(10):
+    KEY_ALIASES[str(index)] = 0x30 + index
+for code in range(ord("a"), ord("z") + 1):
+    KEY_ALIASES[chr(code)] = code - 32
+
+
+def key_code_from_name(name):
+    key = (name or "").strip().lower()
+    if not key:
+        raise ValueError("按键名称不能为空。")
+    if key.startswith("vk:"):
+        try:
+            return int(key[3:], 0)
+        except ValueError as exc:
+            raise ValueError("vk: 后面应填写数字，例如 vk:0x20。") from exc
+    if key in KEY_ALIASES:
+        return KEY_ALIASES[key]
+    raise ValueError(f"不支持的按键：{name}")
 
 
 class POINT(ctypes.Structure):
@@ -56,6 +113,28 @@ def key_up(vk):
     user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
 
 
+
+
+def press_key(vk):
+    key_down(vk)
+    time.sleep(0.025)
+    key_up(vk)
+
+
+def hotkey(keys):
+    codes = [key_code_from_name(key) for key in keys]
+    if not codes:
+        raise ValueError("快捷键不能为空。")
+    for code in codes[:-1]:
+        key_down(code)
+        time.sleep(0.015)
+    key_down(codes[-1])
+    time.sleep(0.025)
+    key_up(codes[-1])
+    for code in reversed(codes[:-1]):
+        key_up(code)
+        time.sleep(0.015)
+
 def hotkey_ctrl(vk):
     key_down(VK_CONTROL)
     time.sleep(0.025)
@@ -66,9 +145,7 @@ def hotkey_ctrl(vk):
 
 
 def press_enter():
-    key_down(VK_RETURN)
-    time.sleep(0.025)
-    key_up(VK_RETURN)
+    press_key(VK_RETURN)
 
 
 def set_clipboard_text(text):
@@ -133,3 +210,8 @@ def focus_window(hwnd):
     user32.ShowWindow(hwnd, 5)
     time.sleep(0.1)
     return bool(user32.SetForegroundWindow(hwnd))
+
+
+
+
+

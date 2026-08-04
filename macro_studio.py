@@ -509,7 +509,7 @@ class MacroStudio(tk.Tk):
         self.step_wait_after = tk.StringVar()
         self.step_enabled = tk.BooleanVar(value=True)
         ttk.Entry(form, textvariable=self.step_name, width=18).pack(side=tk.LEFT, padx=(0, 6))
-        self.kind_combo = ttk.Combobox(form, textvariable=self.step_kind, width=10, values=["click", "image_click", "paste", "wait", "enter", "ctrl_a", "hotkey", "log"], state="readonly")
+        self.kind_combo = ttk.Combobox(form, textvariable=self.step_kind, width=10, values=["click", "image_click", "paste", "wait", "key", "enter", "ctrl_a", "hotkey", "log"], state="readonly")
         self.kind_combo.pack(side=tk.LEFT, padx=(0, 6))
         self.kind_combo.bind("<<ComboboxSelected>>", self.on_step_kind_changed)
         self.target_combo = ttk.Combobox(form, textvariable=self.step_target, width=14, values=[], state="readonly")
@@ -520,7 +520,7 @@ class MacroStudio(tk.Tk):
         self.wait_after_entry = ttk.Entry(form, textvariable=self.step_wait_after, width=7)
         self.wait_after_entry.pack(side=tk.LEFT)
         ttk.Checkbutton(form, text="启用", variable=self.step_enabled).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Label(frame, text="参数：paste=粘贴文本，wait=等待时间，hotkey=快捷键，image_click=图像目标名称；其它动作通常只填点位和后等待。", style="Muted.TLabel").pack(anchor=tk.W, pady=(8, 0))
+        ttk.Label(frame, text="参数：paste=粘贴文本，wait=等待时间，key=按键名，hotkey=组合键，image_click=图像目标名称；其它动作通常只填点位和后等待。", style="Muted.TLabel").pack(anchor=tk.W, pady=(8, 0))
 
         buttons = ttk.Frame(frame, style="Panel.TFrame")
         buttons.pack(fill=tk.X, pady=(8, 0))
@@ -1478,7 +1478,7 @@ class MacroStudio(tk.Tk):
         elif current_target:
             self.step_target.set(current_target)
 
-        value_enabled = kind in ("paste", "wait", "hotkey", "log", "image_click")
+        value_enabled = kind in ("paste", "wait", "key", "hotkey", "log", "image_click")
         self.value_entry.configure(state="normal" if value_enabled else "disabled")
         if not value_enabled:
             self.step_value.set("")
@@ -2087,16 +2087,17 @@ class MacroStudio(tk.Tk):
         elif kind == "ctrl_a":
             self.after(0, lambda: self.write_log("按 Ctrl+A"))
             hotkey_ctrl(VK_A)
+        elif kind == "key":
+            key_name = value.strip()
+            vk = key_code_from_name(key_name)
+            self.after(0, lambda k=key_name: self.write_log(f"按键：{k}"))
+            press_key(vk)
         elif kind == "hotkey":
-            key = value.strip().lower()
-            if key == "ctrl+a":
-                hotkey_ctrl(VK_A)
-            elif key == "ctrl+v":
-                hotkey_ctrl(VK_V)
-            elif key == "enter":
-                press_enter()
-            else:
-                raise RuntimeError("目前 hotkey 支持 ctrl+a、ctrl+v、enter")
+            keys = [part.strip() for part in value.replace("，", "+").split("+") if part.strip()]
+            if not keys:
+                raise RuntimeError("hotkey 参数不能为空，例如 ctrl+v。")
+            self.after(0, lambda k="+".join(keys): self.write_log(f"快捷键：{k}"))
+            hotkey(keys)
         elif kind == "log":
             self.after(0, lambda: self.write_log(value))
         else:
@@ -2139,6 +2140,9 @@ class MacroStudio(tk.Tk):
 if __name__ == "__main__":
     app = MacroStudio()
     app.mainloop()
+
+
+
 
 
 

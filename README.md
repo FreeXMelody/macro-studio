@@ -88,12 +88,13 @@ python macro_studio.py
 | `image_click` | 按图像目标名称识别模板，命中后点击 |
 | `paste` | 粘贴文本，支持变量，例如 `{keyword}` |
 | `wait` | 等待秒数或 `mm:ss` |
+| `key` | 按一次指定按键，例如 `space`、`esc`、`f5`、`a` |
 | `enter` | 按 Enter |
 | `ctrl_a` | 按 Ctrl+A |
-| `hotkey` | 当前支持 `ctrl+a`、`ctrl+v`、`enter` |
+| `hotkey` | 按组合键，例如 `ctrl+v`、`alt+f4`、`ctrl+space` |
 | `log` | 写一条日志，便于调试流程 |
 
-除 `wait` 外，每个动作都可以填写“后等待”，表示动作执行完成后额外等待多久。
+除 `wait` 外，每个动作都可以填写“后等待”，表示动作执行完成后额外等待多久。`key`/`hotkey` 支持常见键名：字母、数字、`space`、`tab`、`esc`、方向键、`home`、`end`、`delete`、`f1` 到 `f12`；也可以用 `vk:0x20` 这类虚拟键码。
 
 ## Playlist Variables
 
@@ -149,3 +150,4 @@ python -m py_compile .\macro_studio.py .\models.py .\storage.py .\utils.py .\aut
 ## License
 
 MIT
+
