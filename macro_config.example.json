@@ -27,6 +27,8 @@
     { "name": "点击搜索按钮", "kind": "click", "target": "搜索按钮", "value": "", "enabled": true, "wait_after": "2" },
     { "name": "打开第一个结果", "kind": "click", "target": "第一个结果", "value": "", "enabled": true, "wait_after": "" },
     { "name": "按空格示例", "kind": "key", "target": "", "value": "space", "enabled": false, "wait_after": "" },
+    { "name": "长按空格示例", "kind": "key_hold", "target": "", "value": "space@0.8", "enabled": false, "wait_after": "" },
+    { "name": "组合键示例", "kind": "hotkey", "target": "", "value": "ctrl+space", "enabled": false, "wait_after": "" },
     { "name": "等待本首结束", "kind": "wait", "target": "", "value": "{total}", "enabled": true, "wait_after": "" }
   ],
   "image_targets": [],

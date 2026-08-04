@@ -16,20 +16,6 @@ VK_F9 = 0x78
 GMEM_MOVEABLE = 0x0002
 CF_UNICODETEXT = 13
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
-GlobalAlloc = kernel32.GlobalAlloc
-GlobalLock = kernel32.GlobalLock
-GlobalUnlock = kernel32.GlobalUnlock
-GlobalFree = kernel32.GlobalFree
-GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
-GlobalAlloc.restype = ctypes.c_void_p
-GlobalLock.argtypes = [ctypes.c_void_p]
-GlobalLock.restype = ctypes.c_void_p
-GlobalUnlock.argtypes = [ctypes.c_void_p]
-GlobalFree.argtypes = [ctypes.c_void_p]
-user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
-user32.SetClipboardData.restype = ctypes.c_void_p
 KEY_ALIASES = {
     "backspace": 0x08,
     "tab": 0x09,
@@ -53,6 +39,26 @@ KEY_ALIASES = {
     "insert": 0x2D,
     "delete": 0x2E,
     "del": 0x2E,
+    "printscreen": 0x2C,
+    "pause": 0x13,
+    "capslock": 0x14,
+    "numlock": 0x90,
+    "scrolllock": 0x91,
+    "num0": 0x60,
+    "num1": 0x61,
+    "num2": 0x62,
+    "num3": 0x63,
+    "num4": 0x64,
+    "num5": 0x65,
+    "num6": 0x66,
+    "num7": 0x67,
+    "num8": 0x68,
+    "num9": 0x69,
+    "num*": 0x6A,
+    "num+": 0x6B,
+    "num-": 0x6D,
+    "num.": 0x6E,
+    "num/": 0x6F,
     "plus": 0xBB,
     "minus": 0xBD,
     "comma": 0xBC,
@@ -65,12 +71,32 @@ KEY_ALIASES = {
     "]": 0xDD,
     "\\": 0xDC,
 }
-for index in range(1, 13):
+for index in range(1, 25):
     KEY_ALIASES[f"f{index}"] = 0x6F + index
 for index in range(10):
     KEY_ALIASES[str(index)] = 0x30 + index
 for code in range(ord("a"), ord("z") + 1):
     KEY_ALIASES[chr(code)] = code - 32
+KEY_CHOICES = tuple(sorted(KEY_ALIASES.keys()))
+
+user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+GlobalAlloc = kernel32.GlobalAlloc
+GlobalLock = kernel32.GlobalLock
+GlobalUnlock = kernel32.GlobalUnlock
+GlobalFree = kernel32.GlobalFree
+GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+GlobalAlloc.restype = ctypes.c_void_p
+GlobalLock.argtypes = [ctypes.c_void_p]
+GlobalLock.restype = ctypes.c_void_p
+GlobalUnlock.argtypes = [ctypes.c_void_p]
+GlobalFree.argtypes = [ctypes.c_void_p]
+user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+user32.SetClipboardData.restype = ctypes.c_void_p
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
 def key_code_from_name(name):
@@ -87,8 +113,25 @@ def key_code_from_name(name):
     raise ValueError(f"不支持的按键：{name}")
 
 
-class POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+def parse_key_combo(text):
+    keys = [part.strip() for part in (text or "").replace("，", "+").split("+") if part.strip()]
+    if not keys:
+        raise ValueError("按键不能为空。")
+    return keys
+
+
+def parse_key_duration(text, default_seconds=0.25):
+    value = (text or "").strip()
+    if not value:
+        return "", float(default_seconds)
+    for separator in ("@", ",", " "):
+        if separator in value:
+            key_text, seconds_text = value.rsplit(separator, 1)
+            try:
+                return key_text.strip(), max(0.0, float(seconds_text.strip().rstrip("s秒")))
+            except ValueError:
+                break
+    return value, float(default_seconds)
 
 
 def get_cursor_pos():
@@ -113,35 +156,35 @@ def key_up(vk):
     user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
 
 
-
-
-def press_key(vk):
+def press_key(vk, hold_seconds=0.025):
     key_down(vk)
-    time.sleep(0.025)
+    time.sleep(max(0.0, float(hold_seconds)))
     key_up(vk)
 
 
-def hotkey(keys):
+def press_key_name(name, hold_seconds=0.025):
+    press_key(key_code_from_name(name), hold_seconds)
+
+
+def hold_key_name(name, seconds):
+    press_key_name(name, seconds)
+
+
+def hotkey(keys, hold_seconds=0.025):
     codes = [key_code_from_name(key) for key in keys]
     if not codes:
         raise ValueError("快捷键不能为空。")
-    for code in codes[:-1]:
+    for code in codes:
         key_down(code)
         time.sleep(0.015)
-    key_down(codes[-1])
-    time.sleep(0.025)
-    key_up(codes[-1])
-    for code in reversed(codes[:-1]):
+    time.sleep(max(0.0, float(hold_seconds)))
+    for code in reversed(codes):
         key_up(code)
         time.sleep(0.015)
 
+
 def hotkey_ctrl(vk):
-    key_down(VK_CONTROL)
-    time.sleep(0.025)
-    key_down(vk)
-    time.sleep(0.025)
-    key_up(vk)
-    key_up(VK_CONTROL)
+    hotkey(["ctrl", f"vk:{vk}"])
 
 
 def press_enter():
@@ -210,8 +253,3 @@ def focus_window(hwnd):
     user32.ShowWindow(hwnd, 5)
     time.sleep(0.1)
     return bool(user32.SetForegroundWindow(hwnd))
-
-
-
-
-

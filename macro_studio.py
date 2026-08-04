@@ -8,7 +8,9 @@ import tkinter.font as tkfont
 from dataclasses import asdict
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from actions import ACTION_HELP_TEXT, ACTION_KINDS, TARGET_ACTION_KINDS, VALUE_ACTION_KINDS
 from automation import (
+    KEY_CHOICES,
     VK_A,
     VK_F8,
     VK_F9,
@@ -17,8 +19,15 @@ from automation import (
     find_window,
     focus_window,
     get_cursor_pos,
+    hotkey,
     hotkey_ctrl,
+    key_code_from_name,
+    key_down,
+    key_up,
+    parse_key_combo,
+    parse_key_duration,
     press_enter,
+    press_key,
     set_clipboard_text,
     user32,
 )
@@ -509,7 +518,7 @@ class MacroStudio(tk.Tk):
         self.step_wait_after = tk.StringVar()
         self.step_enabled = tk.BooleanVar(value=True)
         ttk.Entry(form, textvariable=self.step_name, width=18).pack(side=tk.LEFT, padx=(0, 6))
-        self.kind_combo = ttk.Combobox(form, textvariable=self.step_kind, width=10, values=["click", "image_click", "paste", "wait", "key", "enter", "ctrl_a", "hotkey", "log"], state="readonly")
+        self.kind_combo = ttk.Combobox(form, textvariable=self.step_kind, width=10, values=ACTION_KINDS, state="readonly")
         self.kind_combo.pack(side=tk.LEFT, padx=(0, 6))
         self.kind_combo.bind("<<ComboboxSelected>>", self.on_step_kind_changed)
         self.target_combo = ttk.Combobox(form, textvariable=self.step_target, width=14, values=[], state="readonly")
@@ -520,7 +529,7 @@ class MacroStudio(tk.Tk):
         self.wait_after_entry = ttk.Entry(form, textvariable=self.step_wait_after, width=7)
         self.wait_after_entry.pack(side=tk.LEFT)
         ttk.Checkbutton(form, text="启用", variable=self.step_enabled).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Label(frame, text="参数：paste=粘贴文本，wait=等待时间，key=按键名，hotkey=组合键，image_click=图像目标名称；其它动作通常只填点位和后等待。", style="Muted.TLabel").pack(anchor=tk.W, pady=(8, 0))
+        ttk.Label(frame, text=ACTION_HELP_TEXT, style="Muted.TLabel").pack(anchor=tk.W, pady=(8, 0))
 
         buttons = ttk.Frame(frame, style="Panel.TFrame")
         buttons.pack(fill=tk.X, pady=(8, 0))
@@ -530,6 +539,7 @@ class MacroStudio(tk.Tk):
         ttk.Button(buttons, text="删除", command=self.delete_step).pack(side=tk.LEFT, padx=6)
         ttk.Button(buttons, text="上移", command=lambda: self.move_step(-1)).pack(side=tk.LEFT)
         ttk.Button(buttons, text="下移", command=lambda: self.move_step(1)).pack(side=tk.LEFT, padx=6)
+        ttk.Button(buttons, text="按键设置", command=self.open_keyboard_action_dialog).pack(side=tk.RIGHT)
 
     def build_playlist_panel(self, parent):
         frame = ttk.LabelFrame(parent, text="歌单变量", padding=10)
@@ -1471,14 +1481,14 @@ class MacroStudio(tk.Tk):
         kind = self.step_kind.get()
         current_target = self.step_target.get()
         self.target_combo.configure(values=[p.name for p in self.points])
-        needs_target = kind == "click"
+        needs_target = kind in TARGET_ACTION_KINDS
         self.target_combo.configure(state="readonly" if needs_target else "disabled")
         if not needs_target:
             self.step_target.set("")
         elif current_target:
             self.step_target.set(current_target)
 
-        value_enabled = kind in ("paste", "wait", "key", "hotkey", "log", "image_click")
+        value_enabled = kind in VALUE_ACTION_KINDS
         self.value_entry.configure(state="normal" if value_enabled else "disabled")
         if not value_enabled:
             self.step_value.set("")
@@ -1659,6 +1669,85 @@ class MacroStudio(tk.Tk):
                 step.target = ""
         self.persist()
         self.refresh_all()
+
+    def open_keyboard_action_dialog(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("按键设置")
+        dialog.configure(bg=self.colors["panel"])
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        mode = tk.StringVar(value={
+            "key": "单击",
+            "key_hold": "长按",
+            "key_down": "按下",
+            "key_up": "抬起",
+            "hotkey": "组合键",
+            "hotkey_hold": "组合键长按",
+        }.get(self.step_kind.get(), "单击"))
+        key_name = tk.StringVar(value=self.step_value.get().strip() if self.step_kind.get().startswith("key") else "space")
+        combo_text = tk.StringVar(value=self.step_value.get().strip() if self.step_kind.get().startswith("hotkey") else "ctrl+space")
+        hold_seconds = tk.StringVar(value="0.5")
+
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=14)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="模式", style="Panel.TLabel").grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
+        mode_combo = ttk.Combobox(body, textvariable=mode, values=["单击", "长按", "按下", "抬起", "组合键", "组合键长按"], state="readonly", width=18)
+        mode_combo.grid(row=0, column=1, sticky=tk.EW, pady=(0, 8))
+        ttk.Label(body, text="单键", style="Panel.TLabel").grid(row=1, column=0, sticky=tk.W, pady=(0, 8))
+        key_combo = ttk.Combobox(body, textvariable=key_name, values=KEY_CHOICES, width=24)
+        key_combo.grid(row=1, column=1, sticky=tk.EW, pady=(0, 8))
+        ttk.Label(body, text="组合键", style="Panel.TLabel").grid(row=2, column=0, sticky=tk.W, pady=(0, 8))
+        ttk.Entry(body, textvariable=combo_text, width=28).grid(row=2, column=1, sticky=tk.EW, pady=(0, 8))
+        ttk.Label(body, text="长按秒", style="Panel.TLabel").grid(row=3, column=0, sticky=tk.W, pady=(0, 8))
+        ttk.Entry(body, textvariable=hold_seconds, width=10).grid(row=3, column=1, sticky=tk.W, pady=(0, 8))
+        ttk.Label(body, text="组合键用 + 连接，例如 ctrl+space、shift+tab。", style="Muted.TLabel").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(0, 12))
+        body.columnconfigure(1, weight=1)
+        buttons = ttk.Frame(body, style="Panel.TFrame")
+        buttons.grid(row=5, column=0, columnspan=2, sticky=tk.EW)
+
+        def apply_keyboard_action():
+            label = mode.get()
+            try:
+                seconds = max(0.0, float((hold_seconds.get() or "0.5").strip()))
+            except ValueError:
+                messagebox.showwarning("按键设置", "长按秒数需要填写数字。", parent=dialog)
+                return
+            mapping = {
+                "单击": ("key", key_name.get().strip()),
+                "长按": ("key_hold", f"{key_name.get().strip()}@{seconds:g}"),
+                "按下": ("key_down", key_name.get().strip()),
+                "抬起": ("key_up", key_name.get().strip()),
+                "组合键": ("hotkey", combo_text.get().strip()),
+                "组合键长按": ("hotkey_hold", f"{combo_text.get().strip()}@{seconds:g}"),
+            }
+            kind, value = mapping[label]
+            try:
+                if kind.startswith("key"):
+                    key_text, _seconds = parse_key_duration(value, seconds)
+                    key_code_from_name(key_text)
+                else:
+                    combo_value, _seconds = parse_key_duration(value, seconds)
+                    parse_key_combo(combo_value)
+                    for item in parse_key_combo(combo_value):
+                        key_code_from_name(item)
+            except ValueError as exc:
+                messagebox.showwarning("按键设置", str(exc), parent=dialog)
+                return
+            self.step_kind.set(kind)
+            self.step_value.set(value)
+            self.step_target.set("")
+            self.update_step_form_state()
+            dialog.destroy()
+
+        ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="应用", style="Accent.TButton", command=apply_keyboard_action).pack(side=tk.RIGHT, padx=(0, 8))
+        dialog.bind("<Return>", lambda _event: apply_keyboard_action())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_width()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+        dialog.grab_set()
     def build_step_from_form(self):
         name = self.step_name.get().strip() or self.step_kind.get()
         kind = self.step_kind.get()
@@ -2092,12 +2181,30 @@ class MacroStudio(tk.Tk):
             vk = key_code_from_name(key_name)
             self.after(0, lambda k=key_name: self.write_log(f"按键：{k}"))
             press_key(vk)
+        elif kind == "key_hold":
+            key_name, seconds = parse_key_duration(value, 0.5)
+            vk = key_code_from_name(key_name)
+            self.after(0, lambda k=key_name, s=seconds: self.write_log(f"长按：{k} {s:.2f}s"))
+            press_key(vk, seconds)
+        elif kind == "key_down":
+            key_name = value.strip()
+            vk = key_code_from_name(key_name)
+            self.after(0, lambda k=key_name: self.write_log(f"按下：{k}"))
+            key_down(vk)
+        elif kind == "key_up":
+            key_name = value.strip()
+            vk = key_code_from_name(key_name)
+            self.after(0, lambda k=key_name: self.write_log(f"抬起：{k}"))
+            key_up(vk)
         elif kind == "hotkey":
-            keys = [part.strip() for part in value.replace("，", "+").split("+") if part.strip()]
-            if not keys:
-                raise RuntimeError("hotkey 参数不能为空，例如 ctrl+v。")
+            keys = parse_key_combo(value)
             self.after(0, lambda k="+".join(keys): self.write_log(f"快捷键：{k}"))
             hotkey(keys)
+        elif kind == "hotkey_hold":
+            key_text, seconds = parse_key_duration(value, 0.5)
+            keys = parse_key_combo(key_text)
+            self.after(0, lambda k="+".join(keys), s=seconds: self.write_log(f"组合键长按：{k} {s:.2f}s"))
+            hotkey(keys, seconds)
         elif kind == "log":
             self.after(0, lambda: self.write_log(value))
         else:
@@ -2140,108 +2247,4 @@ class MacroStudio(tk.Tk):
 if __name__ == "__main__":
     app = MacroStudio()
     app.mainloop()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
