@@ -5,6 +5,14 @@ import time
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 KEYEVENTF_KEYUP = 0x0002
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_CHAR = 0x0102
+MK_LBUTTON = 0x0001
+SMTO_ABORTIFHUNG = 0x0002
 VK_CONTROL = 0x11
 VK_A = 0x41
 VK_V = 0x56
@@ -93,6 +101,12 @@ GlobalUnlock.argtypes = [ctypes.c_void_p]
 GlobalFree.argtypes = [ctypes.c_void_p]
 user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
 user32.SetClipboardData.restype = ctypes.c_void_p
+user32.ScreenToClient.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+user32.ScreenToClient.restype = ctypes.c_bool
+user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+user32.PostMessageW.restype = ctypes.c_bool
+user32.SendMessageTimeoutW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_size_t)]
+user32.SendMessageTimeoutW.restype = ctypes.c_size_t
 
 
 class POINT(ctypes.Structure):
@@ -147,6 +161,79 @@ def click_xy(x, y):
     time.sleep(0.035)
     user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
+
+def _client_lparam(hwnd, screen_x, screen_y):
+    point = POINT(int(screen_x), int(screen_y))
+    if not user32.ScreenToClient(hwnd, ctypes.byref(point)):
+        raise RuntimeError("无法将屏幕坐标换算为窗口坐标。")
+    return (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
+
+
+def _deliver_window_message(hwnd, message, wparam, lparam):
+    """Prefer synchronous delivery so queued clicks cannot overtake UI changes."""
+    result = ctypes.c_size_t()
+    delivered = user32.SendMessageTimeoutW(
+        hwnd,
+        message,
+        wparam,
+        lparam,
+        SMTO_ABORTIFHUNG,
+        450,
+        ctypes.byref(result),
+    )
+    if delivered:
+        return
+    if not user32.PostMessageW(hwnd, message, wparam, lparam):
+        raise RuntimeError("无法向目标窗口发送消息。")
+
+def post_click_xy(hwnd, x, y):
+    """Deliver a click to a window without moving the physical cursor."""
+    if not hwnd:
+        raise RuntimeError("窗口消息模式需要目标窗口。")
+    lparam = _client_lparam(hwnd, x, y)
+    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+    if not user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam):
+        raise RuntimeError("无法向目标窗口发送鼠标按下消息。")
+    time.sleep(0.035)
+    if not user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam):
+        raise RuntimeError("无法向目标窗口发送鼠标抬起消息。")
+
+
+def post_key(hwnd, vk, is_down=True):
+    if not hwnd:
+        raise RuntimeError("窗口消息模式需要目标窗口。")
+    message = WM_KEYDOWN if is_down else WM_KEYUP
+    lparam = 1 if is_down else 0xC0000001
+    if not user32.PostMessageW(hwnd, message, int(vk), lparam):
+        raise RuntimeError("无法向目标窗口发送按键消息。")
+
+
+def post_press_key(hwnd, vk, hold_seconds=0.025):
+    post_key(hwnd, vk, True)
+    time.sleep(max(0.0, float(hold_seconds)))
+    post_key(hwnd, vk, False)
+
+
+def post_hotkey(hwnd, keys, hold_seconds=0.025):
+    codes = [key_code_from_name(key) for key in keys]
+    for code in codes:
+        post_key(hwnd, code, True)
+        time.sleep(0.015)
+    time.sleep(max(0.0, float(hold_seconds)))
+    for code in reversed(codes):
+        post_key(hwnd, code, False)
+        time.sleep(0.015)
+
+
+def post_text(hwnd, text):
+    """Send Unicode WM_CHAR units without changing the clipboard."""
+    if not hwnd:
+        raise RuntimeError("窗口消息模式需要目标窗口。")
+    units = (text or "").encode("utf-16-le")
+    for offset in range(0, len(units), 2):
+        code_unit = int.from_bytes(units[offset:offset + 2], "little")
+        if not user32.PostMessageW(hwnd, WM_CHAR, code_unit, 1):
+            raise RuntimeError("无法向目标窗口发送文本消息。")
 
 def key_down(vk):
     user32.keybd_event(vk, 0, 0, 0)

@@ -1,3 +1,6 @@
 opencv-python>=4.8
 numpy>=1.24
 Pillow>=10.0
+qrcode[pil]>=8.2
+windows-capture>=2.0
+pydivert>=3.1,<4

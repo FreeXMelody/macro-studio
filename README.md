@@ -78,8 +78,36 @@ python macro_studio.py
 | --- | --- |
 | 阈值 | 模板匹配最低相似度，常用 `0.80` 到 `0.95` |
 | 偏移X/Y | 命中模板中心后再偏移点击的位置 |
-| 重试秒 | 最多识别多久，超时会停止动作并写日志 |
+| 重试秒 | 单轮持续识别时间；超时后会按动作序列恢复策略重试或回退 |
 
+
+## Stage Search
+
+歌单面板里的“剧组搜索”可以调用剧组站搜索接口，读取候选作品的 `property` 元数据，并自动从 `actionTime` / `speechTime` 填入作品时长。结果列表会显示分类、作者、时长、热度、收藏数、喜欢数和封面预览，默认只筛选单人作品。
+
+`role_id` / `user_id` 是当前账号角色标识，通常同一角色下比较稳定；`skey` 是会话票据，可能会随登录或过期变化；`sort` / `page_size` / 分类过滤是搜索参数。打开剧组搜索窗口时，程序会通过 WinDivert 启动一次性只读监听；接受 UAC 后，在 90 秒内于游戏剧组站搜索一次作品，即可自动捕获并验证这些参数。剪贴板导入保留为备用入口。配置只保存在本地 `macro_config.json`，不要提交到仓库。
+
+建议流程：打开剧组搜索，接受监听权限，在游戏内执行一次搜索；参数验证通过后，从候选列表选择作品，然后“填入表单”或“加入歌单”。
+
+## Stage Diagnostics
+
+“剧组搜索”窗口里的“诊断”按钮会只读扫描本机 WebView 缓存、关键 DLL 字符串和最近游戏日志，用来辅助判断剧组站是否存在可调用的 native bridge 或播放入口。
+
+推荐流程：
+
+1. 打开游戏并进入剧组站。
+2. 搜索一个作品，最好再点一次“预览作品”。
+3. 关闭游戏，让 WebView 缓存文件释放。
+4. 打开 Macro Studio，进入“剧组搜索”，点击“诊断”。
+5. 查看报告里的“结论 / 提示”“WebView 缓存命中”“游戏模块命中”和“最近播放/桥接日志”。
+
+也可以命令行生成报告：
+
+```powershell
+python .\stage_diagnostics.py .\stage_diagnostics_report.txt
+```
+
+诊断报告可能包含本机路径、缓存 URL 和日志片段，默认不会提交到仓库。
 ## Action Types
 
 | 类型 | 说明 |
@@ -96,9 +124,11 @@ python macro_studio.py
 | `ctrl_a` | 按 Ctrl+A |
 | `hotkey` | 单击组合键，例如 `ctrl+v`、`alt+f4`、`shift+tab` |
 | `hotkey_hold` | 长按组合键，例如 `ctrl+space@0.5` |
+| `open_uri` | 打开网页或 Windows 协议链接，例如剧组站深链 |
+| `http_request` | 发送一次 HTTP 请求，例如 `GET http://127.0.0.1:端口/path` |
 | `log` | 写一条日志，便于调试流程 |
 
-除 `wait` 外，每个动作都可以填写“后等待”，表示动作执行完成后额外等待多久。`key`/`hotkey` 支持常见键名：字母、数字、`space`、`tab`、`esc`、方向键、`home`、`end`、`delete`、小键盘 `num0` 到 `num9`、`f1` 到 `f24`；也可以用 `vk:0x20` 这类 Windows 虚拟键码。动作面板里的“按键设置”按钮可以用表单生成单击、长按、按下、抬起、组合键和组合键长按参数。
+除 `wait` 外，每个动作都可以填写“后等待”，表示动作执行完成后额外等待多久。`key`/`hotkey` 支持常见键名：字母、数字、`space`、`tab`、`esc`、方向键、`home`、`end`、`delete`、小键盘 `num0` 到 `num9`、`f1` 到 `f24`；也可以用 `vk:0x20` 这类 Windows 虚拟键码。动作面板里的“按键设置”按钮可以用表单生成单击、长按、按下、抬起、组合键和组合键长按参数。`open_uri` 和 `http_request` 主要用于探索剧组站入口：拿到真实深链或本地接口后填入参数即可测试。
 
 ## Playlist Variables
 
@@ -140,8 +170,10 @@ Copy-Item playlist.example.json playlist.json
 ## Development Check
 
 ```powershell
-python -m py_compile .\macro_studio.py .\models.py .\storage.py .\utils.py .\automation.py .\vision.py
+python -m py_compile .\macro_studio.py .\models.py .\storage.py .\utils.py .\automation.py .\vision.py .\stage_api.py .\stage_http_listener.py .\stage_transport.py .\stage_diagnostics.py
 ```
+
+Vue 3 + TypeScript + Tauri 的渐进式迁移约束与验收阶段见 [`docs/TAURI_REFACTOR_STRATEGY.md`](docs/TAURI_REFACTOR_STRATEGY.md)。
 
 ## Roadmap Ideas
 
@@ -154,4 +186,3 @@ python -m py_compile .\macro_studio.py .\models.py .\storage.py .\utils.py .\aut
 ## License
 
 MIT
-

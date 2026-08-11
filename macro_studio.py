@@ -1,12 +1,17 @@
+import io
+import json
 import os
 import random
 import re
+import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+import urllib.parse
 from dataclasses import asdict
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 from actions import ACTION_HELP_TEXT, ACTION_KINDS, TARGET_ACTION_KINDS, VALUE_ACTION_KINDS
 from automation import (
@@ -28,19 +33,31 @@ from automation import (
     parse_key_duration,
     press_enter,
     press_key,
+    post_click_xy,
+    post_hotkey,
+    post_key,
+    post_press_key,
+    post_text,
     set_clipboard_text,
     user32,
 )
 from models import ImageTarget, PointDef, PointGroup, Song, SongGroup, Step
+from stage_api import DEFAULT_STAGE_API_CONFIG, StageApiError, fetch_bytes, fill_work_duration, normalize_config, parse_stage_request_text, search_works
+from stage_http_listener import StageCaptureError, launch_elevated_capture
+from stage_diagnostics import run_stage_diagnostics
+from stage_transport import open_uri, send_http_request
 from storage import load_json, save_json
 from utils import format_duration, parse_duration, render_template
-from vision import locate_template
+from vision import locate_template, locate_template_in_window
 
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "macro_config.json")
 PLAYLIST_PATH = os.path.join(APP_DIR, "playlist.json")
 DEFAULT_WINDOW_HINT = "逆水寒手游桌面版"
+DEFAULT_ACTION_COLORS = {"click":"#244b59", "image_click":"#315f56", "paste":"#5b4a78", "wait":"#504a38", "key":"#4b5368", "key_hold":"#4b5368", "key_down":"#4b5368", "key_up":"#4b5368", "enter":"#4b5368", "ctrl_a":"#4b5368", "hotkey":"#4b5368", "hotkey_hold":"#4b5368", "open_uri":"#3f5d70", "http_request":"#3f5d70", "log":"#4a4a4a"}
+INPUT_MODE_LABELS = {"foreground": "前台输入（兼容）", "window_message": "窗口消息（实验，不碰外设）"}
+INPUT_MODE_VALUES = {label: key for key, label in INPUT_MODE_LABELS.items()}
 
 class MacroStudio(tk.Tk):
     def __init__(self):
@@ -49,6 +66,7 @@ class MacroStudio(tk.Tk):
         self.fit_initial_window()
 
         self.config_data = self.load_config()
+        self.stage_api_config = normalize_config(self.config_data.get("stage_api", DEFAULT_STAGE_API_CONFIG))
         self.point_groups = self.load_point_groups(self.config_data)
         self.active_point_group = tk.StringVar(value=self.config_data.get("active_point_group", self.point_groups[0].name))
         if not self.find_point_group(self.active_point_group.get()):
@@ -74,6 +92,8 @@ class MacroStudio(tk.Tk):
         self.active_mode = tk.StringVar(value="playlist")
         self.playback_loop_var = tk.BooleanVar(value=bool(self.config_data.get("playback_loop", False)))
         self.playback_random_var = tk.BooleanVar(value=bool(self.config_data.get("playback_random", False)))
+        self.input_mode_var = tk.StringVar(value=INPUT_MODE_LABELS.get(self.config_data.get("input_mode", "foreground"), INPUT_MODE_LABELS["foreground"]))
+        self.action_colors = {**DEFAULT_ACTION_COLORS, **self.config_data.get("action_colors", {})}
 
         self.colors = {
             "bg": "#0f1115",
@@ -409,6 +429,7 @@ class MacroStudio(tk.Tk):
         action_box = ttk.Frame(header)
         action_box.pack(side=tk.RIGHT)
         ttk.Button(action_box, text="保存", command=self.persist).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(action_box, text="快速重启", command=self.restart_app).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(action_box, text="运行一次", command=self.start_single).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Checkbutton(action_box, text="随机", variable=self.playback_random_var).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Checkbutton(action_box, text="循环", variable=self.playback_loop_var).pack(side=tk.LEFT, padx=(0, 8))
@@ -421,6 +442,8 @@ class MacroStudio(tk.Tk):
         ttk.Entry(window_bar, textvariable=self.window_hint, width=28).pack(side=tk.LEFT, padx=10)
         self.focus_var = tk.BooleanVar(value=bool(self.config_data.get("focus_window", True)))
         ttk.Checkbutton(window_bar, text="执行前聚焦窗口", variable=self.focus_var).pack(side=tk.LEFT, padx=(2, 12))
+        ttk.Label(window_bar, text="输入方式", style="Panel.TLabel").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Combobox(window_bar, textvariable=self.input_mode_var, values=tuple(INPUT_MODE_LABELS.values()), state="readonly", width=25).pack(side=tk.LEFT, padx=(0, 12))
         ttk.Button(window_bar, text="检测", command=self.check_window).pack(side=tk.LEFT)
         self.window_status = tk.StringVar(value="未检测")
         ttk.Label(window_bar, textvariable=self.window_status, style="Panel.TLabel").pack(side=tk.LEFT, padx=12)
@@ -486,6 +509,7 @@ class MacroStudio(tk.Tk):
         self.step_preset_combo = ttk.Combobox(preset_bar, textvariable=self.active_step_preset, width=22, state="readonly")
         self.step_preset_combo.pack(side=tk.LEFT, padx=(8, 6))
         ttk.Button(preset_bar, text="图像目标", command=self.open_image_target_manager).pack(side=tk.RIGHT)
+        ttk.Button(preset_bar, text="类型配色", command=self.open_action_color_dialog).pack(side=tk.RIGHT, padx=(0, 6))
 
         preset_actions = ttk.Frame(frame, style="Panel.TFrame")
         preset_actions.pack(fill=tk.X, pady=(0, 8))
@@ -495,14 +519,19 @@ class MacroStudio(tk.Tk):
         ttk.Button(preset_actions, text="复制", command=self.copy_step_preset).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(preset_actions, text="重命名", command=self.rename_step_preset).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(preset_actions, text="删除", command=self.delete_step_preset).pack(side=tk.LEFT, padx=(6, 0))
-        self.step_table = ttk.Treeview(frame, columns=("on", "name", "kind", "target", "value", "wait_after"), show="headings", selectmode="browse")
+        self.step_table = ttk.Treeview(frame, columns=("on", "name", "kind", "target", "value", "wait_after"), show="headings", selectmode="browse", style="Step.Treeview")
         for col, text, width in [
             ("on", "启用", 48), ("name", "动作", 150), ("kind", "类型", 90), ("target", "点位", 110), ("value", "参数", 130), ("wait_after", "后等待", 72)
         ]:
             self.step_table.heading(col, text=text)
             self.step_table.column(col, width=width, anchor=tk.CENTER if col in ("on", "kind") else tk.W)
         self.step_table.pack(fill=tk.BOTH, expand=True)
+        style = ttk.Style()
+        style.map("Treeview", background=[("selected", "#356b78")], foreground=[("selected", "#ffffff")])
+        style.map("Step.Treeview", background=[("selected", "")], foreground=[("selected", "#ffffff")])
         self.step_table.tag_configure("drop_target", background="#315f56")
+        self.step_table.tag_configure("selected_step", foreground="#ffffff", font=("Microsoft YaHei UI", 10, "bold"))
+        for kind, color in self.action_colors.items(): self.step_table.tag_configure(f"kind_{kind}", background=color)
         self.step_table.bind("<<TreeviewSelect>>", self.on_step_selected)
         self.step_table.bind("<ButtonPress-1>", self.on_step_drag_start)
         self.step_table.bind("<B1-Motion>", self.on_step_drag_motion)
@@ -525,7 +554,10 @@ class MacroStudio(tk.Tk):
         self.target_combo.pack(side=tk.LEFT, padx=(0, 6))
         self.value_entry = ttk.Entry(form, textvariable=self.step_value, width=18)
         self.value_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(form, text="后等待", style="Panel.TLabel").pack(side=tk.LEFT, padx=(8, 4))
+        self.image_value_combo = ttk.Combobox(form, textvariable=self.step_value, width=18, values=[], state="readonly")
+        self.image_target_manage_button = ttk.Button(form, text="管理图片", command=self.open_image_target_manager)
+        self.wait_after_label = ttk.Label(form, text="后等待", style="Panel.TLabel")
+        self.wait_after_label.pack(side=tk.LEFT, padx=(8, 4))
         self.wait_after_entry = ttk.Entry(form, textvariable=self.step_wait_after, width=7)
         self.wait_after_entry.pack(side=tk.LEFT)
         ttk.Checkbutton(form, text="启用", variable=self.step_enabled).pack(side=tk.LEFT, padx=(8, 0))
@@ -594,6 +626,7 @@ class MacroStudio(tk.Tk):
         ttk.Button(buttons, text="更新", command=self.update_song).pack(side=tk.LEFT, padx=6)
         ttk.Button(buttons, text="删除", command=self.delete_song).pack(side=tk.LEFT, padx=6)
         ttk.Button(buttons, text="移动到", command=self.move_song_to_group).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="剧组搜索", command=self.open_stage_search_dialog).pack(side=tk.RIGHT)
         order_buttons = ttk.Frame(frame, style="Panel.TFrame")
         order_buttons.pack(fill=tk.X, pady=(6, 0))
         ttk.Button(order_buttons, text="上移", command=lambda: self.move_song(-1)).pack(side=tk.LEFT)
@@ -622,6 +655,18 @@ class MacroStudio(tk.Tk):
                 ),
             )
 
+    def open_action_color_dialog(self):
+        win = tk.Toplevel(self); win.title("动作类型配色"); win.transient(self); box = ttk.Frame(win, padding=14); box.pack(fill=tk.BOTH, expand=True)
+        for kind in ACTION_KINDS:
+            row = ttk.Frame(box); row.pack(fill=tk.X, pady=3)
+            value = tk.StringVar(value=self.action_colors.get(kind, "#4a4a4a"))
+            ttk.Label(row, text=kind, width=16).pack(side=tk.LEFT)
+            swatch = tk.Label(row, bg=value.get(), width=5); swatch.pack(side=tk.LEFT, padx=6)
+            def choose(k=kind, var=value, label=swatch):
+                color = colorchooser.askcolor(var.get(), parent=win)[1]
+                if color: self.action_colors[k] = color; var.set(color); label.configure(bg=color); self.step_table.tag_configure(f"kind_{k}", background=color); self.refresh_steps(); self.persist()
+            ttk.Button(row, text="选择颜色", command=choose).pack(side=tk.LEFT)
+        ttk.Button(box, text="关闭", command=win.destroy).pack(anchor=tk.E, pady=(10,0))
     def open_image_target_manager(self):
         if hasattr(self, "image_target_window") and self.image_target_window.winfo_exists():
             self.image_target_window.lift()
@@ -655,7 +700,7 @@ class MacroStudio(tk.Tk):
         scroll_canvas.bind_all("<MouseWheel>", lambda event: scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"))
         win.bind("<Destroy>", lambda event: scroll_canvas.unbind_all("<MouseWheel>") if event.widget is win else None)
         ttk.Label(shell, text="图像目标", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor=tk.W)
-        ttk.Label(shell, text="image_click 会按名称读取这里的模板，识别到后点击模板中心。", style="Muted.TLabel").pack(anchor=tk.W, pady=(2, 10))
+        ttk.Label(shell, text="模板命中后默认点击中心；可用位置预设选择边角，再用微调 X/Y 调整。", style="Muted.TLabel").pack(anchor=tk.W, pady=(2, 10))
 
         self.image_target_table = ttk.Treeview(shell, columns=("name", "template", "region", "threshold", "offset", "retry"), show="headings", selectmode="browse", height=8)
         for col, label, width in [
@@ -679,6 +724,7 @@ class MacroStudio(tk.Tk):
         self.image_target_threshold = tk.StringVar(value="0.85")
         self.image_target_offset_x = tk.StringVar(value="0")
         self.image_target_offset_y = tk.StringVar(value="0")
+        self.image_target_click_preset = tk.StringVar(value="居中")
         self.image_target_retry = tk.StringVar(value="3")
 
         row1 = ttk.Frame(form, style="Panel.TFrame")
@@ -689,6 +735,7 @@ class MacroStudio(tk.Tk):
         ttk.Entry(row1, textvariable=self.image_target_template).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
         ttk.Button(row1, text="选择图片", command=self.choose_image_target_file).pack(side=tk.LEFT)
         ttk.Button(row1, text="读取剪贴板", command=self.choose_image_target_clipboard).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(row1, text="重命名文件", command=self.rename_image_target_template_file).pack(side=tk.LEFT, padx=(6, 0))
 
         row2 = ttk.Frame(form, style="Panel.TFrame")
         row2.pack(fill=tk.X, pady=(8, 0))
@@ -699,20 +746,22 @@ class MacroStudio(tk.Tk):
 
         row3 = ttk.Frame(form, style="Panel.TFrame")
         row3.pack(fill=tk.X, pady=(8, 0))
-        for label, var, width in [
-            ("阈值", self.image_target_threshold, 7),
-            ("偏移X", self.image_target_offset_x, 7),
-            ("偏移Y", self.image_target_offset_y, 7),
-            ("重试秒", self.image_target_retry, 7),
-        ]:
+        ttk.Label(row3, text="阈值", style="Panel.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Entry(row3, textvariable=self.image_target_threshold, width=7).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(row3, text="点击位置", style="Panel.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+        preset_box = ttk.Combobox(row3, textvariable=self.image_target_click_preset, values=("居中", "左上", "上边中点", "右上", "左边中点", "右边中点", "左下", "下边中点", "右下", "自定义"), state="readonly", width=13)
+        preset_box.pack(side=tk.LEFT, padx=(0, 12))
+        preset_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_image_click_preset())
+        for label, var in [("微调 X", self.image_target_offset_x), ("微调 Y", self.image_target_offset_y), ("重试秒", self.image_target_retry)]:
             ttk.Label(row3, text=label, style="Panel.TLabel").pack(side=tk.LEFT, padx=(0, 4))
-            ttk.Entry(row3, textvariable=var, width=width).pack(side=tk.LEFT, padx=(0, 12))
+            ttk.Entry(row3, textvariable=var, width=7).pack(side=tk.LEFT, padx=(0, 12))
 
         preview = ttk.Frame(shell, style="Panel.TFrame", padding=10)
         preview.pack(fill=tk.X, pady=(10, 0))
         ttk.Label(preview, text="模板预览", style="Panel.TLabel").pack(side=tk.LEFT, padx=(0, 10))
-        self.image_target_preview = tk.Label(preview, text="暂无图片", width=34, height=8, bg="#10141b", fg=self.colors["muted"], anchor=tk.CENTER, relief=tk.FLAT)
+        self.image_target_preview = tk.Label(preview, text="暂无图片", width=68, height=18, bg="#10141b", fg=self.colors["muted"], anchor=tk.CENTER, relief=tk.FLAT)
         self.image_target_preview.pack(side=tk.LEFT)
+        ttk.Button(preview, text="放大预览", command=self.open_image_target_preview_window).pack(side=tk.LEFT, padx=(10, 0))
         self.image_target_preview_info = tk.StringVar(value="选择或读取剪贴板后显示预览")
         ttk.Label(preview, textvariable=self.image_target_preview_info, style="Muted.TLabel").pack(side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True)
         self.image_target_preview_image = None
@@ -848,6 +897,46 @@ class MacroStudio(tk.Tk):
             except tk.TclError:
                 pass
         self.region_capture_restore_state = {}
+    def open_image_target_preview_window(self):
+        path = self.image_target_template.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showwarning("放大预览", "请先选择或读取一张模板图片。", parent=getattr(self, "image_target_window", self))
+            return
+        try:
+            from PIL import Image, ImageTk
+            image = Image.open(path).convert("RGB")
+            original_w, original_h = image.size
+            max_w = min(900, self.winfo_screenwidth() - 160)
+            max_h = min(650, self.winfo_screenheight() - 180)
+            ratio = min(max_w / original_w, max_h / original_h)
+            preview = image.resize((max(1, int(original_w * ratio)), max(1, int(original_h * ratio))), Image.LANCZOS)
+        except Exception as exc:
+            messagebox.showerror("放大预览", f"无法打开模板：{exc}", parent=getattr(self, "image_target_window", self))
+            return
+        win = tk.Toplevel(getattr(self, "image_target_window", self))
+        win.title(f"模板预览 - {os.path.basename(path)}")
+        win.configure(bg="#10141b")
+        photo = ImageTk.PhotoImage(preview)
+        label = tk.Label(win, image=photo, bg="#10141b")
+        label.image = photo
+        label.pack(padx=14, pady=14)
+        ttk.Label(win, text=f"原图 {original_w} x {original_h}；显示 {preview.width} x {preview.height}").pack(pady=(0, 12))
+    def apply_image_click_preset(self):
+        preset = self.image_target_click_preset.get()
+        if preset == "自定义":
+            return
+        try:
+            from PIL import Image
+            with Image.open(self.image_target_template.get().strip()) as image:
+                width, height = image.size
+        except Exception:
+            self.image_target_click_preset.set("自定义")
+            return
+        half_w, half_h = width // 2, height // 2
+        offsets = {"居中": (0, 0), "左上": (-half_w, -half_h), "上边中点": (0, -half_h), "右上": (half_w, -half_h), "左边中点": (-half_w, 0), "右边中点": (half_w, 0), "左下": (-half_w, half_h), "下边中点": (0, half_h), "右下": (half_w, half_h)}
+        offset_x, offset_y = offsets[preset]
+        self.image_target_offset_x.set(str(offset_x))
+        self.image_target_offset_y.set(str(offset_y))
     def update_image_target_preview(self):
         if not hasattr(self, "image_target_preview"):
             return
@@ -864,8 +953,8 @@ class MacroStudio(tk.Tk):
             from PIL import Image, ImageTk
             image = Image.open(path).convert("RGB")
             original_w, original_h = image.size
-            max_w, max_h = 240, 140
-            ratio = min(max_w / original_w, max_h / original_h, 1.0)
+            max_w, max_h = 520, 300
+            ratio = min(max_w / original_w, max_h / original_h)
             preview_w = max(1, int(original_w * ratio))
             preview_h = max(1, int(original_h * ratio))
             image = image.resize((preview_w, preview_h), Image.LANCZOS)
@@ -875,7 +964,7 @@ class MacroStudio(tk.Tk):
             return
         self.image_target_preview_image = photo
         self.image_target_preview.configure(image=photo, text="")
-        self.image_target_preview_info.set(f"{original_w} x {original_h}，预览 {preview_w} x {preview_h}")
+        self.image_target_preview_info.set(f"{original_w} x {original_h}，预览 {preview_w} x {preview_h}；偏移以模板中心为基准。")
     def image_target_index(self):
         if not hasattr(self, "image_target_table"):
             return None
@@ -914,6 +1003,41 @@ class MacroStudio(tk.Tk):
             index += 1
         return path
 
+    def rename_image_target_template_file(self):
+        path = self.image_target_template.get().strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showwarning("重命名文件", "请先选择或读取一张模板图片。", parent=getattr(self, "image_target_window", self))
+            return
+        template_folder = os.path.abspath(os.path.join(APP_DIR, "image_templates"))
+        source_path = os.path.abspath(path)
+        try:
+            is_managed_template = os.path.commonpath([template_folder, source_path]) == template_folder
+        except ValueError:
+            is_managed_template = False
+        if not is_managed_template:
+            messagebox.showwarning("重命名文件", "只可重命名“读取剪贴板”保存到 image_templates 的模板文件。", parent=getattr(self, "image_target_window", self))
+            return
+        current_name = os.path.splitext(os.path.basename(source_path))[0]
+        new_name = simpledialog.askstring("重命名模板文件", "文件名", initialvalue=current_name, parent=getattr(self, "image_target_window", self))
+        if new_name is None:
+            return
+        new_name = self.safe_template_filename(new_name)
+        target_path = self.unique_template_path(new_name)
+        if os.path.normcase(source_path) == os.path.normcase(target_path):
+            return
+        try:
+            os.replace(source_path, target_path)
+        except OSError as exc:
+            messagebox.showerror("重命名文件", f"无法重命名模板文件：{exc}", parent=getattr(self, "image_target_window", self))
+            return
+        for target in self.image_targets:
+            if os.path.normcase(os.path.abspath(target.template_path)) == os.path.normcase(source_path):
+                target.template_path = target_path
+        self.image_target_template.set(target_path)
+        self.persist()
+        self.refresh_image_targets()
+        self.update_image_target_preview()
+        self.write_log(f"已重命名模板文件：{os.path.basename(target_path)}")
     def choose_image_target_clipboard(self):
         try:
             from PIL import Image, ImageGrab
@@ -944,6 +1068,7 @@ class MacroStudio(tk.Tk):
         path = self.unique_template_path(self.image_target_name.get())
         image.convert("RGB").save(path, "PNG")
         self.image_target_template.set(path)
+        self.update_image_target_preview()
         self.write_log(f"已从剪贴板保存模板图：{path}")
     def choose_image_target_file(self):
         path = filedialog.askopenfilename(
@@ -1277,7 +1402,7 @@ class MacroStudio(tk.Tk):
         for item in self.step_table.get_children():
             self.step_table.delete(item)
         for idx, step in enumerate(self.steps):
-            self.step_table.insert("", tk.END, iid=str(idx), values=("是" if step.enabled else "否", step.name, step.kind, step.target, step.value, step.wait_after))
+            self.step_table.insert("", tk.END, iid=str(idx), values=("是" if step.enabled else "否", step.name, step.kind, step.target, step.value, step.wait_after), tags=(f"kind_{step.kind}",))
 
     def refresh_song_groups(self):
         if hasattr(self, "song_group_combo"):
@@ -1461,7 +1586,17 @@ class MacroStudio(tk.Tk):
         if idx is not None:
             self.point_name.set(self.points[idx].name)
 
+    def highlight_selected_step(self):
+        if not hasattr(self, "step_table"):
+            return
+        selected = set(self.step_table.selection())
+        for iid in self.step_table.get_children(""):
+            tags = [tag for tag in self.step_table.item(iid, "tags") if tag != "selected_step"]
+            if iid in selected:
+                tags.append("selected_step")
+            self.step_table.item(iid, tags=tuple(tags))
     def on_step_selected(self, _event=None):
+        self.highlight_selected_step()
         idx = self.table_index(self.step_table)
         if idx is None:
             return
@@ -1489,7 +1624,17 @@ class MacroStudio(tk.Tk):
             self.step_target.set(current_target)
 
         value_enabled = kind in VALUE_ACTION_KINDS
-        self.value_entry.configure(state="normal" if value_enabled else "disabled")
+        is_image_click = kind == "image_click"
+        if is_image_click:
+            self.value_entry.pack_forget()
+            self.image_value_combo.configure(values=[target.name for target in self.image_targets], state="readonly")
+            self.image_value_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, before=self.wait_after_label)
+            self.image_target_manage_button.pack(side=tk.LEFT, padx=(6, 0), before=self.wait_after_label)
+        else:
+            self.image_value_combo.pack_forget()
+            self.image_target_manage_button.pack_forget()
+            self.value_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, before=self.wait_after_label)
+            self.value_entry.configure(state="normal" if value_enabled else "disabled")
         if not value_enabled:
             self.step_value.set("")
         self.wait_after_entry.configure(state="disabled" if kind == "wait" else "normal")
@@ -1546,14 +1691,15 @@ class MacroStudio(tk.Tk):
         if iid == self.drag_over_iid:
             return
         if self.drag_over_iid and self.step_table.exists(self.drag_over_iid):
-            self.step_table.item(self.drag_over_iid, tags=())
+            self.step_table.item(self.drag_over_iid, tags=tuple(tag for tag in self.step_table.item(self.drag_over_iid, "tags") if tag != "drop_target"))
         self.drag_over_iid = iid if iid else None
         if self.drag_over_iid and self.step_table.exists(self.drag_over_iid):
-            self.step_table.item(self.drag_over_iid, tags=("drop_target",))
+            current_tags = self.step_table.item(self.drag_over_iid, "tags")
+            self.step_table.item(self.drag_over_iid, tags=tuple((*current_tags, "drop_target")))
 
     def clear_step_drag_feedback(self, _event=None):
         if self.drag_over_iid and self.step_table.exists(self.drag_over_iid):
-            self.step_table.item(self.drag_over_iid, tags=())
+            self.step_table.item(self.drag_over_iid, tags=tuple(tag for tag in self.step_table.item(self.drag_over_iid, "tags") if tag != "drop_target"))
         self.drag_over_iid = None
     def on_song_selected(self, _event=None):
         ref = self.selected_song_ref()
@@ -1821,6 +1967,604 @@ class MacroStudio(tk.Tk):
         self.refresh_steps()
         self.step_table.selection_set(str(target))
 
+    def open_stage_search_dialog(self):
+        if hasattr(self, "stage_search_window") and self.stage_search_window.winfo_exists():
+            self.stage_search_window.lift()
+            self.stage_search_window.focus_force()
+            return
+        win = tk.Toplevel(self)
+        self.stage_search_window = win
+        win.title("剧组搜索")
+        win.configure(bg=self.colors["panel"])
+        win.transient(self)
+        width = min(max(1180, int(self.winfo_screenwidth() * 0.74)), self.winfo_screenwidth() - 80)
+        height = min(max(740, int(self.winfo_screenheight() * 0.8)), self.winfo_screenheight() - 100)
+        x = max(0, (self.winfo_screenwidth() - width) // 2)
+        y = max(0, (self.winfo_screenheight() - height) // 2)
+        win.geometry(f"{width}x{height}+{x}+{y}")
+        win.minsize(min(1040, width), min(660, height))
+
+        shell = ttk.Frame(win, padding=14)
+        shell.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(shell, text="剧组站作品搜索", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor=tk.W)
+        ttk.Label(shell, text="程序会直接监听游戏发出的剧组搜索请求并更新登录态；无需 Fiddler 或代理。", style="Muted.TLabel").pack(anchor=tk.W, pady=(2, 10))
+
+        cfg = normalize_config(getattr(self, "stage_api_config", DEFAULT_STAGE_API_CONFIG))
+        cfg_vars = {key: tk.StringVar(value=cfg.get(key, "")) for key in DEFAULT_STAGE_API_CONFIG}
+        keyword_var = tk.StringVar(value=self.song_keyword.get().strip() or self.song_title.get().strip() or self.config_data.get("stage_search_keyword", ""))
+        status_var = tk.StringVar(value="准备监听游戏请求...")
+        capture_state = {"path": "", "deadline": 0.0, "token": 0}
+        selected_index = tk.IntVar(value=-1)
+        sort_by_var = tk.StringVar(value="match")
+        sort_desc_var = tk.BooleanVar(value=True)
+        self.stage_search_results = []
+        self.stage_card_images = {}
+        self.stage_card_frames = {}
+
+        config_box = ttk.LabelFrame(shell, text="接口配置", padding=10)
+        config_box.pack(fill=tk.X)
+        for col in range(6):
+            config_box.columnconfigure(col, weight=1 if col in (1, 3, 5) else 0)
+        rows = [
+            ("base_url", "搜索接口", 0, 0, 5, False),
+            ("role_id", "role_id", 1, 0, 1, False),
+            ("user_id", "user_id", 1, 2, 1, False),
+            ("skey", "skey", 2, 0, 5, True),
+            ("sort", "sort", 3, 0, 1, False),
+            ("page_size", "page_size", 3, 2, 1, False),
+        ]
+        for key, label, row, col, span, secret in rows:
+            ttk.Label(config_box, text=label, style="Panel.TLabel").grid(row=row, column=col, sticky=tk.W, padx=(0, 6), pady=4)
+            entry = ttk.Entry(config_box, textvariable=cfg_vars[key], show="*" if secret else "")
+            entry.grid(row=row, column=col + 1, columnspan=span, sticky=tk.EW, pady=4)
+
+        options = ttk.Frame(shell)
+        options.pack(fill=tk.X, pady=(12, 8))
+        ttk.Label(options, text="关键词", style="Panel.TLabel").pack(side=tk.LEFT)
+        ttk.Entry(options, textvariable=keyword_var, width=24).pack(side=tk.LEFT, padx=(8, 10))
+        ttk.Label(options, text="分类", style="Panel.TLabel").pack(side=tk.LEFT)
+        filter_combo = ttk.Combobox(options, textvariable=cfg_vars["work_filter"], width=10, state="readonly", values=("single", "all", "multi", "movie"))
+        filter_combo.pack(side=tk.LEFT, padx=(8, 10))
+        ttk.Button(options, text="搜索作品", style="Accent.TButton", command=lambda: start_search()).pack(side=tk.LEFT)
+        capture_button = ttk.Button(options, text="重新监听游戏", command=lambda: start_game_capture())
+        capture_button.pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(options, text="剪贴板导入", command=lambda: import_from_clipboard()).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(options, text="保存配置", command=lambda: save_stage_config(True)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(options, text="诊断", command=lambda: self.open_stage_diagnostics_dialog(win)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(options, text="排序", style="Panel.TLabel").pack(side=tk.LEFT, padx=(14, 0))
+        sort_combo = ttk.Combobox(options, textvariable=sort_by_var, width=8, state="readonly", values=("match", "hot", "collect", "like", "duration"))
+        sort_combo.pack(side=tk.LEFT, padx=(8, 6))
+        sort_combo.bind("<<ComboboxSelected>>", lambda _event: resort_current_results())
+        ttk.Checkbutton(options, text="降序", variable=sort_desc_var, command=lambda: resort_current_results()).pack(side=tk.LEFT)
+
+        result_shell = ttk.Frame(shell)
+        result_shell.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(result_shell, bg=self.colors["panel"], highlightthickness=0)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(result_shell, orient=tk.VERTICAL, command=canvas.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.configure(yscrollcommand=scroll.set)
+        cards = ttk.Frame(canvas)
+        cards_window = canvas.create_window((0, 0), window=cards, anchor=tk.NW)
+        cards.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(cards_window, width=event.width))
+        canvas.bind_all("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"))
+        win.bind("<Destroy>", lambda event: canvas.unbind_all("<MouseWheel>") if event.widget is win else None)
+
+        bottom = ttk.Frame(shell)
+        bottom.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(bottom, textvariable=status_var, style="Muted.TLabel").pack(side=tk.LEFT)
+        ttk.Button(bottom, text="填入表单", command=lambda: apply_selected(False)).pack(side=tk.RIGHT)
+        ttk.Button(bottom, text="加入歌单", style="Accent.TButton", command=lambda: apply_selected(True)).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(bottom, text="生成二维码", command=lambda: show_selected_work_qrcode()).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(bottom, text="桥接实验", command=lambda: self.open_stage_bridge_lab(win, selected_work(), {key: var.get().strip() for key, var in cfg_vars.items()})).pack(side=tk.RIGHT, padx=(0, 8))
+
+        def save_stage_config(show_message=False):
+            self.stage_api_config = normalize_config({key: var.get().strip() for key, var in cfg_vars.items()})
+            self.stage_search_keyword = keyword_var.get().strip()
+            self.persist()
+            if show_message:
+                status_var.set("配置已保存。")
+
+        def import_from_clipboard():
+            try:
+                text = self.clipboard_get()
+            except tk.TclError:
+                messagebox.showwarning("剪贴板为空", "请先复制搜索请求 URL 或 Headers。", parent=win)
+                return
+            parsed = parse_stage_request_text(text, {key: var.get().strip() for key, var in cfg_vars.items()})
+            for key, value in parsed.items():
+                if key in cfg_vars:
+                    cfg_vars[key].set(value)
+            status_var.set("已从剪贴板解析配置。skey 已隐藏显示，请保存后搜索。")
+
+        def cleanup_capture_file(path):
+            if not path:
+                return
+            try:
+                os.remove(path)
+            except (FileNotFoundError, OSError):
+                pass
+
+        def apply_captured_config(payload):
+            captured = dict(payload.get("config") or {})
+            captured_keyword = str(captured.pop("keyword", "") or "").strip()
+            for key, value in captured.items():
+                if key in cfg_vars:
+                    cfg_vars[key].set(str(value or ""))
+            if captured_keyword:
+                keyword_var.set(captured_keyword)
+            validation_keyword = captured_keyword or keyword_var.get().strip()
+            if not validation_keyword:
+                status_var.set("已捕获游戏参数，但请求中没有搜索关键词；请手动输入后搜索。")
+                return
+            candidate = normalize_config({key: var.get().strip() for key, var in cfg_vars.items()})
+            status_var.set("已捕获游戏请求，正在验证参数...")
+
+            def worker():
+                try:
+                    works = search_works(validation_keyword, candidate)
+                    for work in works[:12]:
+                        try:
+                            fill_work_duration(work)
+                        except StageApiError:
+                            pass
+
+                    def accept():
+                        self.stage_api_config = candidate
+                        self.stage_search_keyword = validation_keyword
+                        self.persist()
+                        refresh_results(sort_stage_results(works), keep_status=True)
+                        status_var.set(f"已从游戏捕获并验证参数，找到 {len(works)} 个候选。")
+
+                    self.after(0, accept)
+                except Exception as exc:
+                    self.after(0, lambda e=exc: status_var.set(f"已捕获请求，但参数验证失败：{e}"))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def poll_game_capture(token):
+            if not win.winfo_exists() or token != capture_state["token"]:
+                return
+            path = capture_state["path"]
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as stream:
+                        payload = json.load(stream)
+                except (OSError, json.JSONDecodeError):
+                    win.after(250, lambda: poll_game_capture(token))
+                    return
+                cleanup_capture_file(path)
+                capture_button.configure(state=tk.NORMAL)
+                if payload.get("ok"):
+                    apply_captured_config(payload)
+                else:
+                    status_var.set(f"监听失败：{payload.get('error') or '未知错误'}")
+                return
+            if time.monotonic() >= capture_state["deadline"]:
+                capture_button.configure(state=tk.NORMAL)
+                status_var.set("监听超时。点击“重新监听游戏”后，在游戏内执行一次作品搜索。")
+                return
+            win.after(350, lambda: poll_game_capture(token))
+
+        def start_game_capture():
+            cleanup_capture_file(capture_state["path"])
+            capture_state["token"] += 1
+            token = capture_state["token"]
+            path = os.path.join(APP_DIR, f"stage_capture_{os.getpid()}_{int(time.time() * 1000)}.json")
+            capture_state["path"] = path
+            capture_state["deadline"] = time.monotonic() + 95
+            capture_button.configure(state=tk.DISABLED)
+            status_var.set("正在监听游戏请求...请在 90 秒内于游戏剧组站搜索一次作品。")
+            try:
+                launch_elevated_capture(path, timeout=90)
+            except StageCaptureError as exc:
+                capture_button.configure(state=tk.NORMAL)
+                status_var.set(f"监听启动失败：{exc}")
+                return
+            win.after(350, lambda: poll_game_capture(token))
+
+        def bind_card_click(widget, index):
+            widget.bind("<Button-1>", lambda _event, i=index: select_card(i))
+            for child in widget.winfo_children():
+                bind_card_click(child, index)
+
+        def select_card(index):
+            if index < 0 or index >= len(self.stage_search_results):
+                return
+            previous = selected_index.get()
+            selected_index.set(index)
+            for idx in (previous, index):
+                frame = self.stage_card_frames.get(idx)
+                if frame:
+                    selected = idx == index
+                    frame.configure(bg=self.colors["panel2"] if selected else self.colors["panel"], highlightbackground=self.colors["accent"] if selected else self.colors["line"], highlightthickness=2 if selected else 1)
+            work = self.stage_search_results[index]
+            status_var.set(f"已选择：{work.name} / {work.designer_name}")
+
+        def create_metric(parent, label, value):
+            box = tk.Frame(parent, bg=self.colors["panel2"], padx=8, pady=4)
+            tk.Label(box, text=label, bg=self.colors["panel2"], fg=self.colors["muted"], font=("Microsoft YaHei UI", 8)).pack(anchor=tk.W)
+            tk.Label(box, text=str(value), bg=self.colors["panel2"], fg=self.colors["text"], font=("Microsoft YaHei UI", 10, "bold")).pack(anchor=tk.W)
+            return box
+
+        def create_card(index, work):
+            card = tk.Frame(cards, bg=self.colors["panel"], highlightbackground=self.colors["line"], highlightthickness=1, padx=10, pady=10)
+            card.pack(fill=tk.X, pady=(0, 10))
+            self.stage_card_frames[index] = card
+
+            cover_frame = tk.Frame(card, width=300, height=180, bg=self.colors["panel2"])
+            cover_frame.pack(side=tk.LEFT)
+            cover_frame.pack_propagate(False)
+            cover = tk.Label(cover_frame, text="加载封面", bg=self.colors["panel2"], fg=self.colors["muted"], anchor=tk.CENTER)
+            cover.pack(fill=tk.BOTH, expand=True)
+
+            body = tk.Frame(card, bg=self.colors["panel"])
+            body.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(16, 0))
+            title_row = tk.Frame(body, bg=self.colors["panel"])
+            title_row.pack(fill=tk.X)
+            tk.Label(title_row, text=work.name, bg=self.colors["panel"], fg=self.colors["text"], font=("Microsoft YaHei UI", 13, "bold"), anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(title_row, text=work.category_label, bg=self.colors["accent"], fg="#08110e", font=("Microsoft YaHei UI", 9, "bold"), padx=8, pady=2).pack(side=tk.RIGHT)
+            tk.Label(body, text=f"作者：{work.designer_name}   work_id：{work.work_id}", bg=self.colors["panel"], fg=self.colors["muted"], anchor=tk.W).pack(fill=tk.X, pady=(4, 0))
+            summary = work.summary or "无简介"
+            tk.Label(body, text=summary, bg=self.colors["panel"], fg=self.colors["text"], anchor=tk.W, justify=tk.LEFT, wraplength=620).pack(fill=tk.X, pady=(6, 8))
+            metric_row = tk.Frame(body, bg=self.colors["panel"])
+            metric_row.pack(fill=tk.X)
+            duration = format_duration(work.duration_seconds) if work.duration_seconds else "未知"
+            for label, value in [("时长", duration), ("热度", work.hot), ("收藏", work.collect_count), ("喜欢", work.like_count)]:
+                create_metric(metric_row, label, value).pack(side=tk.LEFT, padx=(0, 8))
+
+            bind_card_click(card, index)
+            load_card_cover(index, work, cover)
+            return card
+
+        def load_card_cover(index, work, label):
+            if not work.cover_url:
+                label.configure(text="无封面")
+                return
+            def worker():
+                try:
+                    from PIL import Image
+                    data = fetch_bytes(work.cover_url, {})
+                    image = Image.open(io.BytesIO(data))
+                    image.thumbnail((300, 180))
+                    self.after(0, lambda img=image.copy(): apply_cover(index, label, img))
+                except Exception as exc:
+                    self.after(0, lambda e=exc: label.configure(text="封面失败"))
+            threading.Thread(target=worker, daemon=True).start()
+
+        def apply_cover(index, label, image):
+            from PIL import ImageTk
+            photo = ImageTk.PhotoImage(image)
+            self.stage_card_images[index] = photo
+            label.configure(image=photo, text="")
+
+        def stage_sort_value(work):
+            key = sort_by_var.get()
+            if key == "hot":
+                return work.hot
+            if key == "collect":
+                return work.collect_count
+            if key == "like":
+                return work.like_count
+            if key == "duration":
+                return work.duration_seconds
+            keyword = keyword_var.get().strip().lower()
+            name = work.name.strip().lower()
+            score = 0
+            if keyword and name == keyword:
+                score += 3
+            if keyword and name.startswith(keyword):
+                score += 2
+            if keyword and keyword in name:
+                score += 1
+            return (score, work.hot, work.collect_count, work.like_count)
+
+        def sort_stage_results(works):
+            return sorted(works, key=stage_sort_value, reverse=sort_desc_var.get())
+
+        def resort_current_results():
+            if not self.stage_search_results:
+                return
+            refresh_results(sort_stage_results(list(self.stage_search_results)), keep_status=True)
+        def show_cards_message(message):
+            for child in cards.winfo_children():
+                child.destroy()
+            tk.Label(cards, text=message, bg=self.colors["panel"], fg=self.colors["muted"], pady=24).pack(fill=tk.X)
+
+        def refresh_results(works, keep_status=False):
+            self.stage_search_results = works
+            self.stage_card_images = {}
+            self.stage_card_frames = {}
+            selected_index.set(-1)
+            for child in cards.winfo_children():
+                child.destroy()
+            if works:
+                for idx, work in enumerate(works):
+                    create_card(idx, work)
+                select_card(0)
+            else:
+                tk.Label(cards, text="没有匹配当前分类的作品。", bg=self.colors["panel"], fg=self.colors["muted"], pady=24).pack(fill=tk.X)
+            if not keep_status:
+                status_var.set(f"找到 {len(works)} 个候选，已尝试读取前 {min(len(works), 12)} 个时长。")
+
+        def start_search():
+            keyword = keyword_var.get().strip()
+            if not keyword:
+                status_var.set("请输入搜索关键词；之后打开窗口会自动使用它搜索。")
+                return
+            save_stage_config(False)
+            status_var.set("搜索中...")
+            selected_index.set(-1)
+            self.stage_search_results = []
+            self.stage_card_images = {}
+            for child in cards.winfo_children():
+                child.destroy()
+            tk.Label(cards, text="搜索中...", bg=self.colors["panel"], fg=self.colors["muted"], pady=24).pack(fill=tk.X)
+            def worker():
+                try:
+                    works = search_works(keyword, self.stage_api_config)
+                    for work in works[:12]:
+                        try:
+                            fill_work_duration(work)
+                        except StageApiError:
+                            pass
+                    self.after(0, lambda: refresh_results(sort_stage_results(works)))
+                except Exception as exc:
+                    self.after(0, lambda e=exc: status_var.set(f"搜索失败：{e}"))
+            threading.Thread(target=worker, daemon=True).start()
+
+        def selected_work():
+            index = selected_index.get()
+            if index < 0 or index >= len(self.stage_search_results):
+                messagebox.showwarning("先选作品", "请先选择一个搜索结果。", parent=win)
+                return None
+            return self.stage_search_results[index]
+
+        def apply_selected(add_to_playlist):
+            work = selected_work()
+            if work is None:
+                return
+            self.song_title.set(work.name)
+            self.song_keyword.set(keyword_var.get().strip() or work.name)
+            if work.duration_seconds:
+                self.song_duration.set(format_duration(work.duration_seconds))
+            if add_to_playlist:
+                self.add_song()
+            else:
+                duration = format_duration(work.duration_seconds) if work.duration_seconds else "未知时长"
+                self.write_log(f"已填入剧组作品：{work.name} ({duration})")
+
+        def show_selected_work_qrcode():
+            work = selected_work()
+            if work is None:
+                return
+            content = f"workId_{work.work_id}"
+            try:
+                import qrcode
+                from PIL import ImageTk
+            except Exception as exc:
+                messagebox.showerror("缺少依赖", f"无法生成二维码：{exc}", parent=win)
+                return
+
+            qr_dir = os.path.join(APP_DIR, "stage_qrcodes")
+            os.makedirs(qr_dir, exist_ok=True)
+            safe_name = re.sub(r"[^0-9A-Za-z_\-]+", "_", work.name).strip("_") or str(work.work_id)
+            file_path = os.path.join(qr_dir, f"{safe_name}_{content}.png")
+            image = qrcode.make(content).convert("RGB")
+            image.save(file_path)
+
+            popup = tk.Toplevel(win)
+            popup.title("workId 二维码")
+            popup.configure(bg=self.colors["panel"])
+            popup.transient(win)
+            popup.resizable(False, False)
+            box = ttk.Frame(popup, padding=16)
+            box.pack(fill=tk.BOTH, expand=True)
+            ttk.Label(box, text=work.name, font=("Microsoft YaHei UI", 13, "bold")).pack(anchor=tk.W)
+            ttk.Label(box, text=f"{content}  /  作者：{work.designer_name}", style="Muted.TLabel").pack(anchor=tk.W, pady=(2, 10))
+            photo = ImageTk.PhotoImage(image.resize((256, 256)))
+            label = tk.Label(box, image=photo, bg="#ffffff", padx=8, pady=8)
+            label.image = photo
+            label.pack(pady=(0, 10))
+            ttk.Label(box, text=f"已保存：{file_path}", style="Muted.TLabel", wraplength=360).pack(anchor=tk.W)
+            ttk.Button(box, text="关闭", command=popup.destroy).pack(anchor=tk.E, pady=(12, 0))
+            status_var.set(f"已生成二维码：{content}")
+
+        win.after(250, start_game_capture)
+
+    def open_stage_bridge_lab(self, parent, work, config):
+        if work is None:
+            return
+        win = tk.Toplevel(parent or self)
+        win.title("剧组桥接实验")
+        win.configure(bg=self.colors["panel"])
+        win.transient(parent or self)
+        width = min(max(820, int(self.winfo_screenwidth() * 0.52)), self.winfo_screenwidth() - 120)
+        height = min(max(640, int(self.winfo_screenheight() * 0.68)), self.winfo_screenheight() - 120)
+        x = max(0, (self.winfo_screenwidth() - width) // 2)
+        y = max(0, (self.winfo_screenheight() - height) // 2)
+        win.geometry(f"{width}x{height}+{x}+{y}")
+        win.minsize(min(760, width), min(560, height))
+
+        shell = ttk.Frame(win, padding=14)
+        shell.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(shell, text="剧组桥接实验", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor=tk.W)
+        ttk.Label(
+            shell,
+            text="基于本地逆向结果生成候选参数；它不会直接注入游戏，可用于下一轮 Fiddler/游戏内验证。",
+            style="Muted.TLabel",
+        ).pack(anchor=tk.W, pady=(2, 10))
+
+        info = ttk.LabelFrame(shell, text="当前作品", padding=10)
+        info.pack(fill=tk.X)
+        ttk.Label(info, text=work.name, font=("Microsoft YaHei UI", 12, "bold")).pack(anchor=tk.W)
+        duration = format_duration(work.duration_seconds) if work.duration_seconds else "未知"
+        ttk.Label(info, text=f"作者：{work.designer_name}   work_id：{work.work_id}   时长：{duration}", style="Muted.TLabel").pack(anchor=tk.W, pady=(2, 0))
+
+        role_id = (config or {}).get("role_id", "")
+        user_id = (config or {}).get("user_id", "")
+        stage_base = "https://hapi.hi.163.com/nshm/action-station"
+        query = {"work_id": str(work.work_id)}
+        if role_id:
+            query["role_id"] = role_id
+        if user_id:
+            query["user_id"] = user_id
+        query_text = urllib.parse.urlencode(query)
+        candidates = [
+            f"{stage_base}/work/detail?{query_text}",
+            f"{stage_base}/work?{query_text}",
+            f"{stage_base}?workId={work.work_id}",
+        ]
+        ulink_url = "https://app.16163.com/ds/ulinks/?action=openUrl&url=" + urllib.parse.quote(candidates[0], safe="")
+        candidates.append(ulink_url)
+
+        selected_url = tk.StringVar(value=candidates[0])
+        status_var = tk.StringVar(value="选择候选 URL 后复制 payload，或用“系统打开 URL”做普通浏览器验证。")
+
+        url_box = ttk.LabelFrame(shell, text="候选 URL", padding=10)
+        url_box.pack(fill=tk.X, pady=(10, 0))
+        for url in candidates:
+            ttk.Radiobutton(url_box, text=url, value=url, variable=selected_url).pack(anchor=tk.W, pady=2)
+
+        payload_box = ttk.LabelFrame(shell, text="Payload", padding=10)
+        payload_box.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        text = tk.Text(payload_box, height=12, bg="#10141b", fg=self.colors["text"], insertbackground=self.colors["text"], relief=tk.FLAT, wrap=tk.WORD)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(payload_box, orient=tk.VERTICAL, command=text.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        text.configure(yscrollcommand=scroll.set)
+
+        def make_payloads():
+            url = selected_url.get()
+            return {
+                "work_id_qr": f"workId_{work.work_id}",
+                "ngwebview_open_in_game_webview": {
+                    "methodId": "NGWebViewOpenURL",
+                    "URLString": url,
+                    "width": 0,
+                    "height": 0,
+                    "skinType": 0,
+                    "modalType": 0,
+                    "disableGame": 0,
+                    "isTop": 1,
+                },
+                "gmbridge_open_page": {
+                    "methodId": "ntOpenGMPage",
+                    "refer": url,
+                },
+                "ngwebview_open_system_browser": {
+                    "methodId": "openBrowser",
+                    "reqData": {"webURL": url},
+                },
+            }
+
+        def refresh_payload():
+            text.configure(state=tk.NORMAL)
+            text.delete("1.0", tk.END)
+            text.insert(tk.END, json.dumps(make_payloads(), ensure_ascii=False, indent=2))
+            text.configure(state=tk.DISABLED)
+
+        def copy_payload():
+            payload = text.get("1.0", tk.END).strip()
+            self.clipboard_clear()
+            self.clipboard_append(payload)
+            status_var.set("已复制 payload。")
+
+        def copy_url():
+            self.clipboard_clear()
+            self.clipboard_append(selected_url.get())
+            status_var.set("已复制候选 URL。")
+
+        def open_selected_url():
+            try:
+                open_uri(selected_url.get())
+                status_var.set("已交给系统打开。注意：这不是游戏内 WebView 验证。")
+            except Exception as exc:
+                messagebox.showerror("打开失败", str(exc), parent=win)
+
+        selected_url.trace_add("write", lambda *_args: refresh_payload())
+        refresh_payload()
+
+        ttk.Label(shell, textvariable=status_var, style="Muted.TLabel").pack(anchor=tk.W, pady=(10, 0))
+        buttons = ttk.Frame(shell)
+        buttons.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(buttons, text="复制 payload", style="Accent.TButton", command=copy_payload).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="复制 URL", command=copy_url).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(buttons, text="系统打开 URL", command=open_selected_url).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(buttons, text="关闭", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+    def open_stage_diagnostics_dialog(self, parent=None):
+        if hasattr(self, "stage_diagnostics_window") and self.stage_diagnostics_window.winfo_exists():
+            self.stage_diagnostics_window.lift()
+            self.stage_diagnostics_window.focus_force()
+            return
+        win = tk.Toplevel(parent or self)
+        self.stage_diagnostics_window = win
+        win.title("剧组诊断")
+        win.configure(bg=self.colors["panel"])
+        win.transient(parent or self)
+        width = min(max(980, int(self.winfo_screenwidth() * 0.68)), self.winfo_screenwidth() - 100)
+        height = min(max(680, int(self.winfo_screenheight() * 0.74)), self.winfo_screenheight() - 120)
+        x = max(0, (self.winfo_screenwidth() - width) // 2)
+        y = max(0, (self.winfo_screenheight() - height) // 2)
+        win.geometry(f"{width}x{height}+{x}+{y}")
+        win.minsize(min(860, width), min(560, height))
+
+        shell = ttk.Frame(win, padding=14)
+        shell.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(shell, text="剧组站桥接 / 缓存诊断", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor=tk.W)
+        ttk.Label(shell, text="只读扫描 WebView 缓存、关键 DLL 字符串和最近日志；建议关闭游戏后运行，结果更完整。", style="Muted.TLabel").pack(anchor=tk.W, pady=(2, 10))
+
+        status_var = tk.StringVar(value="准备扫描。")
+        action_bar = ttk.Frame(shell)
+        action_bar.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(action_bar, textvariable=status_var, style="Muted.TLabel").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        run_button = ttk.Button(action_bar, text="开始诊断")
+        run_button.pack(side=tk.RIGHT)
+        copy_button = ttk.Button(action_bar, text="复制报告")
+        copy_button.pack(side=tk.RIGHT, padx=(0, 8))
+
+        text_box = tk.Text(shell, wrap=tk.WORD, bg=self.colors["panel2"], fg=self.colors["text"], insertbackground=self.colors["text"], relief=tk.FLAT, padx=10, pady=10)
+        text_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(shell, orient=tk.VERTICAL, command=text_box.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        text_box.configure(yscrollcommand=scroll.set)
+        text_box.insert(tk.END, "点击“开始诊断”后会生成报告。\n\n你可以先打开游戏进入剧组站、搜索/预览一次作品，然后关闭游戏再运行诊断。\n")
+        text_box.configure(state=tk.DISABLED)
+
+        def set_report(content):
+            text_box.configure(state=tk.NORMAL)
+            text_box.delete("1.0", tk.END)
+            text_box.insert(tk.END, content)
+            text_box.configure(state=tk.DISABLED)
+
+        def copy_report():
+            content = text_box.get("1.0", tk.END).strip()
+            if not content:
+                return
+            self.clipboard_clear()
+            self.clipboard_append(content)
+            status_var.set("报告已复制到剪贴板。")
+
+        def run_scan():
+            run_button.configure(state=tk.DISABLED)
+            status_var.set("扫描中... 如果刚关游戏，通常几秒内完成。")
+            set_report("扫描中...\n")
+            def worker():
+                try:
+                    report = run_stage_diagnostics()
+                    content = report.to_text()
+                    self.after(0, lambda: set_report(content))
+                    self.after(0, lambda: status_var.set("诊断完成。"))
+                except Exception as exc:
+                    self.after(0, lambda e=exc: set_report(f"诊断失败：{e}"))
+                    self.after(0, lambda e=exc: status_var.set(f"诊断失败：{e}"))
+                finally:
+                    self.after(0, lambda: run_button.configure(state=tk.NORMAL))
+            threading.Thread(target=worker, daemon=True).start()
+
+        run_button.configure(command=run_scan)
+        copy_button.configure(command=copy_report)
     def build_song_from_form(self):
         title = self.song_title.get().strip()
         if not title:
@@ -1953,13 +2697,26 @@ class MacroStudio(tk.Tk):
         self.refresh_songs()
         self.select_song_object(moved_song)
 
+    def restart_app(self):
+        self.stop_event.set()
+        self.persist()
+        try:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__)], cwd=APP_DIR)
+        except OSError as exc:
+            messagebox.showerror("快速重启", f"无法启动新窗口：{exc}", parent=self)
+            return
+        self.after(120, self.destroy)
     def persist(self):
         self.points = self.current_points()
         self.config_data = {
             "window_hint": self.window_hint.get().strip(),
             "focus_window": self.focus_var.get(),
+            "input_mode": self.current_input_mode(),
+            "action_colors": self.action_colors,
             "playback_loop": self.playback_loop_var.get() if hasattr(self, "playback_loop_var") else False,
             "playback_random": self.playback_random_var.get() if hasattr(self, "playback_random_var") else False,
+            "stage_api": self.stage_api_config if hasattr(self, "stage_api_config") else DEFAULT_STAGE_API_CONFIG,
+            "stage_search_keyword": getattr(self, "stage_search_keyword", self.config_data.get("stage_search_keyword", "")),
             "active_point_group": self.active_point_group.get(),
             "point_groups": [
                 {"name": group.name, "points": [asdict(point) for point in group.points]}
@@ -1991,6 +2748,9 @@ class MacroStudio(tk.Tk):
         else:
             self.window_status.set("没有找到")
             self.write_log("没有找到窗口，请改一下关键词。")
+
+    def current_input_mode(self):
+        return INPUT_MODE_VALUES.get(self.input_mode_var.get(), "foreground")
 
     def current_song_jobs(self, enabled_only=False):
         jobs = []
@@ -2089,25 +2849,43 @@ class MacroStudio(tk.Tk):
                 steps, preset_label = self.steps_for_song(song, group)
                 self.points = self.current_points()
                 point_map = {point.name: point for point in self.points}
-                window = find_window(self.window_hint.get()) if self.focus_var.get() else None
-                if self.focus_var.get() and not window:
+                input_mode = self.current_input_mode()
+                needs_window = self.focus_var.get() or input_mode == "window_message"
+                window = find_window(self.window_hint.get()) if needs_window else None
+                if needs_window and not window:
                     self.after(0, lambda: self.write_log("运行失败：找不到目标窗口。"))
                     self.stop_event.set()
                     break
-                if window:
+                if window and self.focus_var.get():
                     focus_window(window["hwnd"])
                 label = song.title if song else "单次运行"
                 prefix = f"第 {cycle} 轮 " if loop_enabled else ""
                 self.after(0, lambda l=label, i=song_index, t=total_songs, p=prefix, g=group.name, preset=preset_label: self.write_log(f"开始 {p}{i}/{t}: {l} [{g} / {preset}]"))
-                for step in steps:
+                step_index = 0
+                image_rollbacks = {}
+                while step_index < len(steps):
                     if self.stop_event.is_set():
                         break
+                    step = steps[step_index]
                     if not step.enabled:
+                        step_index += 1
                         continue
                     self.pause_event.wait()
                     try:
-                        self.execute_step(step, point_map, song)
+                        self.execute_step(step, point_map, song, window)
+                        step_index += 1
                     except Exception as exc:
+                        previous_image = next((index for index in range(step_index - 1, -1, -1) if steps[index].enabled and steps[index].kind == "image_click"), None)
+                        attempts = image_rollbacks.get(step_index, 0)
+                        if step.kind == "image_click" and attempts < 2:
+                            image_rollbacks[step_index] = attempts + 1
+                            recovery_index = previous_image if previous_image is not None else step_index
+                            if previous_image is not None:
+                                self.after(0, lambda s=step, p=steps[previous_image], n=attempts + 1: self.write_log(f"图像识别失败「{s.name}」，回退重试「{p.name}」({n}/2)。"))
+                            else:
+                                self.after(0, lambda s=step, n=attempts + 1: self.write_log(f"图像识别失败「{s.name}」，重新识别当前动作 ({n}/2)。"))
+                            step_index = recovery_index
+                            continue
                         self.after(0, lambda e=exc, s=step: self.write_log(f"动作失败「{s.name}」：{e}"))
                         self.stop_event.set()
                         break
@@ -2125,8 +2903,9 @@ class MacroStudio(tk.Tk):
             self.after(0, lambda: self.write_log("动作序列已停止。"))
         else:
             self.after(0, lambda: self.write_log("动作序列结束。"))
-    def execute_step(self, step, point_map, song):
+    def execute_step(self, step, point_map, song, window=None):
         kind = step.kind
+        message_hwnd = window["hwnd"] if self.current_input_mode() == "window_message" and window else None
         value = render_template(step.value, song)
         if kind == "click":
             point = point_map.get(step.target)
@@ -2135,76 +2914,93 @@ class MacroStudio(tk.Tk):
             if point.x == 0 and point.y == 0:
                 raise RuntimeError(f"点位未采集：{step.target}")
             self.after(0, lambda: self.write_log(f"点击 {step.target}"))
-            click_xy(point.x, point.y)
+            post_click_xy(message_hwnd, point.x, point.y) if message_hwnd else click_xy(point.x, point.y)
         elif kind == "image_click":
             target = self.find_image_target(value)
             if not target:
                 names = "、".join(item.name for item in self.image_targets) or "暂无图像目标"
                 raise RuntimeError(f"图像目标不存在：{value or '未填写'}。当前可用：{names}")
             self.after(0, lambda n=target.name: self.write_log(f"识别图像目标：{n}"))
-            deadline = time.time() + max(0.0, float(target.retry_seconds))
+            retry_window = max(0.0, float(target.retry_seconds))
+            deadline = time.monotonic() + retry_window
             last_error = None
+            attempt_count = 0
             while True:
                 if self.stop_event.is_set():
                     return
                 try:
-                    match = locate_template(target.template_path, target.region, target.threshold)
+                    attempt_count += 1
+                    match = (locate_template_in_window(target.template_path, message_hwnd, target.region, target.threshold) if message_hwnd else locate_template(target.template_path, target.region, target.threshold))
                     click_x = match.x + int(target.offset_x)
                     click_y = match.y + int(target.offset_y)
                     self.after(0, lambda n=target.name, s=match.score, x=click_x, y=click_y: self.write_log(f"图像命中 {n} score={s:.3f}，点击 {x}, {y}"))
-                    click_xy(click_x, click_y)
+                    post_click_xy(message_hwnd, click_x, click_y) if message_hwnd else click_xy(click_x, click_y)
                     break
                 except Exception as exc:
                     last_error = exc
-                    if time.time() >= deadline:
-                        raise RuntimeError(f"图像目标识别失败：{target.name}；{last_error}") from exc
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeError(f"图像目标识别失败：{target.name}；已尝试 {attempt_count} 次；{last_error}") from exc
+                    if attempt_count == 1:
+                        self.after(0, lambda n=target.name, r=retry_window: self.write_log(f"图像暂未命中「{n}」，将在 {r:.1f}s 重试窗口内持续识别。"))
                     self.wait_interruptible(0.25)
         elif kind == "paste":
             if value == "" and song is not None:
                 value = song.keyword or song.title
             self.after(0, lambda v=value: self.write_log(f"粘贴：{v}"))
-            set_clipboard_text(value)
-            time.sleep(0.12)
-            hotkey_ctrl(VK_V)
+            if message_hwnd:
+                post_text(message_hwnd, value)
+            else:
+                set_clipboard_text(value)
+                time.sleep(0.12)
+                hotkey_ctrl(VK_V)
         elif kind == "wait":
             seconds = parse_duration(value)
             self.after(0, lambda: self.write_log(f"等待 {format_duration(seconds)}"))
             self.wait_interruptible(seconds)
         elif kind == "enter":
             self.after(0, lambda: self.write_log("按 Enter"))
-            press_enter()
+            post_press_key(message_hwnd, 0x0D) if message_hwnd else press_enter()
         elif kind == "ctrl_a":
             self.after(0, lambda: self.write_log("按 Ctrl+A"))
-            hotkey_ctrl(VK_A)
+            post_hotkey(message_hwnd, ["ctrl", "a"]) if message_hwnd else hotkey_ctrl(VK_A)
         elif kind == "key":
             key_name = value.strip()
             vk = key_code_from_name(key_name)
             self.after(0, lambda k=key_name: self.write_log(f"按键：{k}"))
-            press_key(vk)
+            post_press_key(message_hwnd, vk) if message_hwnd else press_key(vk)
         elif kind == "key_hold":
             key_name, seconds = parse_key_duration(value, 0.5)
             vk = key_code_from_name(key_name)
             self.after(0, lambda k=key_name, s=seconds: self.write_log(f"长按：{k} {s:.2f}s"))
-            press_key(vk, seconds)
+            post_press_key(message_hwnd, vk, seconds) if message_hwnd else press_key(vk, seconds)
         elif kind == "key_down":
             key_name = value.strip()
             vk = key_code_from_name(key_name)
             self.after(0, lambda k=key_name: self.write_log(f"按下：{k}"))
-            key_down(vk)
+            post_key(message_hwnd, vk, True) if message_hwnd else key_down(vk)
         elif kind == "key_up":
             key_name = value.strip()
             vk = key_code_from_name(key_name)
             self.after(0, lambda k=key_name: self.write_log(f"抬起：{k}"))
-            key_up(vk)
+            post_key(message_hwnd, vk, False) if message_hwnd else key_up(vk)
         elif kind == "hotkey":
             keys = parse_key_combo(value)
             self.after(0, lambda k="+".join(keys): self.write_log(f"快捷键：{k}"))
-            hotkey(keys)
+            post_hotkey(message_hwnd, keys) if message_hwnd else hotkey(keys)
         elif kind == "hotkey_hold":
             key_text, seconds = parse_key_duration(value, 0.5)
             keys = parse_key_combo(key_text)
             self.after(0, lambda k="+".join(keys), s=seconds: self.write_log(f"组合键长按：{k} {s:.2f}s"))
-            hotkey(keys, seconds)
+            post_hotkey(message_hwnd, keys, seconds) if message_hwnd else hotkey(keys, seconds)
+        elif kind == "open_uri":
+            self.after(0, lambda v=value: self.write_log(f"打开链接/协议：{v}"))
+            open_uri(value)
+        elif kind == "http_request":
+            self.after(0, lambda v=value: self.write_log(f"发送 HTTP 请求：{v}"))
+            status, body = send_http_request(value)
+            summary = body.strip().replace("\n", " ")[:120]
+            self.after(0, lambda s=status, b=summary: self.write_log(f"HTTP {s} {b}".rstrip()))
         elif kind == "log":
             self.after(0, lambda: self.write_log(value))
         else:
@@ -2215,7 +3011,7 @@ class MacroStudio(tk.Tk):
             seconds = parse_duration(wait_after)
             self.after(0, lambda: self.write_log(f"动作后等待 {format_duration(seconds)}"))
             self.wait_interruptible(seconds)
-        time.sleep(0.08)
+        time.sleep(0.18 if message_hwnd else 0.08)
     def wait_interruptible(self, seconds):
         remaining = max(0, seconds)
         last_tick = time.time()
@@ -2247,4 +3043,3 @@ class MacroStudio(tk.Tk):
 if __name__ == "__main__":
     app = MacroStudio()
     app.mainloop()
-

@@ -3,6 +3,18 @@
   "focus_window": true,
   "playback_loop": false,
   "playback_random": false,
+  "stage_api": {
+    "base_url": "http://hapi.hi.163.com/nshm/action-station/work/list/search",
+    "role_id": "",
+    "user_id": "",
+    "skey": "",
+    "sort": "",
+    "page_size": "20",
+    "contents": "",
+    "sub_types": "",
+    "actor_count_contents": "",
+    "work_filter": "single"
+  },
   "active_point_group": "默认",
   "point_groups": [
     {
@@ -29,10 +41,11 @@
     { "name": "按空格示例", "kind": "key", "target": "", "value": "space", "enabled": false, "wait_after": "" },
     { "name": "长按空格示例", "kind": "key_hold", "target": "", "value": "space@0.8", "enabled": false, "wait_after": "" },
     { "name": "组合键示例", "kind": "hotkey", "target": "", "value": "ctrl+space", "enabled": false, "wait_after": "" },
+    { "name": "打开剧组站入口示例", "kind": "open_uri", "target": "", "value": "https://example.com", "enabled": false, "wait_after": "" },
+    { "name": "请求游戏入口示例", "kind": "http_request", "target": "", "value": "GET http://127.0.0.1:端口/path", "enabled": false, "wait_after": "" },
     { "name": "等待本首结束", "kind": "wait", "target": "", "value": "{total}", "enabled": true, "wait_after": "" }
   ],
   "image_targets": [],
   "active_step_preset": "",
   "step_presets": []
 }
-

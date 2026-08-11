@@ -23,6 +23,8 @@ ACTION_SPECS = [
     ActionSpec("ctrl_a", "Ctrl+A"),
     ActionSpec("hotkey", "组合键", needs_value=True, help_text="例如 ctrl+v、shift+tab"),
     ActionSpec("hotkey_hold", "组合键长按", needs_value=True, help_text="例如 ctrl+space@0.5"),
+    ActionSpec("open_uri", "打开链接/协议", needs_value=True, help_text="例如 https://... 或 nsh://..."),
+    ActionSpec("http_request", "发送HTTP请求", needs_value=True, help_text="例如 GET http://127.0.0.1:端口/path"),
     ActionSpec("log", "日志", needs_value=True),
 ]
 
@@ -31,5 +33,5 @@ VALUE_ACTION_KINDS = frozenset(spec.kind for spec in ACTION_SPECS if spec.needs_
 TARGET_ACTION_KINDS = frozenset(spec.kind for spec in ACTION_SPECS if spec.needs_target)
 ACTION_HELP_TEXT = (
     "参数：key=单击，key_hold=按键@秒，key_down/up=按下/抬起，"
-    "hotkey=组合键，hotkey_hold=组合键@秒；可点“按键设置”辅助填写。"
+    "hotkey=组合键，hotkey_hold=组合键@秒；open_uri 可打开协议链接，http_request 可测试本地/网页接口。"
 )
