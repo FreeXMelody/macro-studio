@@ -1,0 +1,30 @@
+{
+  "name": "macro-studio-desktop",
+  "version": "1.0.0",
+  "description": "A programmable Windows automation studio built with Vue 3 and Tauri.",
+  "scripts": {
+    "test": "npm --prefix frontend test",
+    "tauri": "tauri",
+    "dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/tauri.ps1 dev",
+    "dev:admin": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/tauri-admin.ps1 dev",
+    "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/tauri.ps1 build",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "web:dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/web-dev.ps1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FreeXMelody/macro-studio.git"
+  },
+  "keywords": [],
+  "author": "FreeXMelody",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/FreeXMelody/macro-studio/issues"
+  },
+  "homepage": "https://github.com/FreeXMelody/macro-studio#readme",
+  "private": true,
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}

@@ -48,11 +48,45 @@ Install dependencies:
 python -m pip install -r requirements.txt
 ```
 
-Run:
+Run the current Tkinter UI:
 
 ```powershell
 python macro_studio.py
 ```
+
+On the `refactor/tauri-vue3` branch, the local sidecar API can also run independently:
+
+```powershell
+python -m backend.main
+```
+
+It binds to a random `127.0.0.1` port and prints one `sidecar.ready` JSON object containing the temporary session token. The run center defaults to simulation mode and can explicitly switch to the Windows executor for real actions. Press F9 for an emergency stop.
+Run the browser development stack without Rust. This starts Vue and the Python sidecar together, injects the temporary token, and stops both when the command exits:
+
+```powershell
+npm --prefix frontend install
+npm run web:dev
+```
+
+Use `npm run frontend:dev` only when you intentionally want the UI without a sidecar; automation and target testing will stay disconnected in that mode.
+
+Run the complete Tauri development app (Rust must be installed):
+
+```powershell
+npm install
+npm run dev
+```
+
+The launcher automatically locates Cargo in the default rustup directory even when the current terminal has an outdated `PATH`. If the system drive has limited free space, save a machine-local Cargo build directory before starting Tauri:
+
+```powershell
+Set-Content .cargo-target 'D:\CargoTarget\macro-studio'
+npm run dev
+```
+
+The `.cargo-target` file is ignored by Git and can contain a drive path specific to the current machine.
+
+In development, Tauri starts `python -m backend.main` automatically and passes its one-time loopback connection to Vue over Tauri IPC. A packaged production build additionally needs the Python sidecar executable; that packaging step is tracked separately from the current development shell.
 
 ## Quick Start
 
@@ -77,8 +111,12 @@ python macro_studio.py
 | 参数 | 说明 |
 | --- | --- |
 | 阈值 | 模板匹配最低相似度，常用 `0.80` 到 `0.95` |
+| 边缘低阈值 | Canny 弱边缘阈值；越低保留的细节越多，同时更容易带入场景噪声 |
+| 边缘高阈值 | Canny 强边缘阈值；越高轮廓越干净，同时可能漏掉较淡的图标边缘 |
 | 偏移X/Y | 命中模板中心后再偏移点击的位置 |
 | 重试秒 | 单轮持续识别时间；超时后会按动作序列恢复策略重试或回退 |
+
+边缘低/高阈值只影响 `edge`、`masked_edge` 以及自动选择边缘算法的 `smart` 模式；`grayscale` 不使用这两个参数。
 
 
 ## Stage Search
@@ -171,6 +209,8 @@ Copy-Item playlist.example.json playlist.json
 
 ```powershell
 python -m py_compile .\macro_studio.py .\models.py .\storage.py .\utils.py .\automation.py .\vision.py .\stage_api.py .\stage_http_listener.py .\stage_transport.py .\stage_diagnostics.py
+python -m compileall -q .\backend
+python -m unittest discover -s .\tests -v
 ```
 
 Vue 3 + TypeScript + Tauri 的渐进式迁移约束与验收阶段见 [`docs/TAURI_REFACTOR_STRATEGY.md`](docs/TAURI_REFACTOR_STRATEGY.md)。

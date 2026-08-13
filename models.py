@@ -35,6 +35,10 @@ class PointGroup:
 class ImageTarget:
     name: str
     template_path: str
+    match_mode: str = "grayscale"
+    mask_path: str = ""
+    edge_low: int = 60
+    edge_high: int = 160
     region: str = ""
     threshold: float = 0.85
     offset_x: int = 0

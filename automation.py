@@ -1,5 +1,6 @@
 import ctypes
 import time
+from ctypes import wintypes
 
 
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -89,6 +90,11 @@ KEY_CHOICES = tuple(sorted(KEY_ALIASES.keys()))
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
+try:
+    # Keep Win32 geometry, cursor positions, overlays, and WGC frames in physical pixels.
+    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+except Exception:
+    pass
 GlobalAlloc = kernel32.GlobalAlloc
 GlobalLock = kernel32.GlobalLock
 GlobalUnlock = kernel32.GlobalUnlock
@@ -111,6 +117,15 @@ user32.SendMessageTimeoutW.restype = ctypes.c_size_t
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
 
 
 def key_code_from_name(name):
@@ -154,6 +169,82 @@ def get_cursor_pos():
     return point.x, point.y
 
 
+def get_process_integrity(pid):
+    """Return the Windows integrity level used by UIPI input filtering."""
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    process_api = ctypes.WinDLL("kernel32", use_last_error=True)
+    token_query = 0x0008
+    token_elevation = 20
+    token_integrity_level = 25
+    query_limited = 0x1000
+
+    class TOKEN_ELEVATION(ctypes.Structure):
+        _fields_ = [("TokenIsElevated", wintypes.DWORD)]
+
+    class SID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+    class TOKEN_MANDATORY_LABEL(ctypes.Structure):
+        _fields_ = [("Label", SID_AND_ATTRIBUTES)]
+
+    process_api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    process_api.OpenProcess.restype = wintypes.HANDLE
+    process_api.CloseHandle.argtypes = [wintypes.HANDLE]
+    advapi32.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+    advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+    advapi32.GetSidSubAuthority.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    advapi32.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
+
+    process = process_api.OpenProcess(query_limited, False, int(pid))
+    if not process:
+        return {"known": False, "rid": 0, "level": "unknown", "elevated": False}
+    token = wintypes.HANDLE()
+    try:
+        if not advapi32.OpenProcessToken(process, token_query, ctypes.byref(token)):
+            return {"known": False, "rid": 0, "level": "unknown", "elevated": False}
+        elevation = TOKEN_ELEVATION()
+        returned = wintypes.DWORD()
+        if not advapi32.GetTokenInformation(
+            token,
+            token_elevation,
+            ctypes.byref(elevation),
+            ctypes.sizeof(elevation),
+            ctypes.byref(returned),
+        ):
+            return {"known": False, "rid": 0, "level": "unknown", "elevated": False}
+        needed = wintypes.DWORD()
+        advapi32.GetTokenInformation(
+            token,
+            token_integrity_level,
+            None,
+            0,
+            ctypes.byref(needed),
+        )
+        buffer = ctypes.create_string_buffer(needed.value)
+        if not advapi32.GetTokenInformation(
+            token,
+            token_integrity_level,
+            buffer,
+            needed.value,
+            ctypes.byref(returned),
+        ):
+            return {"known": False, "rid": 0, "level": "unknown", "elevated": bool(elevation.TokenIsElevated)}
+        sid = ctypes.cast(buffer, ctypes.POINTER(TOKEN_MANDATORY_LABEL)).contents.Label.Sid
+        count = advapi32.GetSidSubAuthorityCount(sid).contents.value
+        rid = int(advapi32.GetSidSubAuthority(sid, count - 1).contents.value)
+        level = "low" if rid < 0x2000 else "medium" if rid < 0x3000 else "high" if rid < 0x4000 else "system"
+        return {
+            "known": True,
+            "rid": rid,
+            "level": level,
+            "elevated": bool(elevation.TokenIsElevated),
+        }
+    finally:
+        if token.value:
+            process_api.CloseHandle(token)
+        process_api.CloseHandle(process)
+
+
 def click_xy(x, y):
     user32.SetCursorPos(int(x), int(y))
     time.sleep(0.04)
@@ -169,7 +260,7 @@ def _client_lparam(hwnd, screen_x, screen_y):
     return (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
 
 
-def _deliver_window_message(hwnd, message, wparam, lparam):
+def _deliver_window_message(hwnd, message, wparam, lparam, label="消息"):
     """Prefer synchronous delivery so queued clicks cannot overtake UI changes."""
     result = ctypes.c_size_t()
     delivered = user32.SendMessageTimeoutW(
@@ -183,20 +274,59 @@ def _deliver_window_message(hwnd, message, wparam, lparam):
     )
     if delivered:
         return
-    if not user32.PostMessageW(hwnd, message, wparam, lparam):
-        raise RuntimeError("无法向目标窗口发送消息。")
+    if user32.PostMessageW(hwnd, message, wparam, lparam):
+        return
+    error_code = int(kernel32.GetLastError())
+    if error_code == 5:
+        raise RuntimeError(
+            f"无法向目标窗口发送{label}（Win32 5：权限不足）。"
+            "游戏以管理员权限运行时，请同样以管理员身份启动 Macro Studio。"
+        )
+    detail = f"Win32 {error_code}" if error_code else "窗口拒绝或句柄已失效"
+    raise RuntimeError(f"无法向目标窗口发送{label}（{detail}）。")
+
+
+def _post_client_click(hwnd, client_x, client_y):
+    lparam = (int(client_x) & 0xFFFF) | ((int(client_y) & 0xFFFF) << 16)
+    _deliver_window_message(hwnd, WM_MOUSEMOVE, 0, lparam, "鼠标移动消息")
+    _deliver_window_message(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam, "鼠标按下消息")
+    time.sleep(0.035)
+    _deliver_window_message(hwnd, WM_LBUTTONUP, 0, lparam, "鼠标抬起消息")
+
 
 def post_click_xy(hwnd, x, y):
-    """Deliver a click to a window without moving the physical cursor."""
+    """Deliver a screen-coordinate click without moving the physical cursor."""
     if not hwnd:
         raise RuntimeError("窗口消息模式需要目标窗口。")
-    lparam = _client_lparam(hwnd, x, y)
-    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
-    if not user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam):
-        raise RuntimeError("无法向目标窗口发送鼠标按下消息。")
-    time.sleep(0.035)
-    if not user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam):
-        raise RuntimeError("无法向目标窗口发送鼠标抬起消息。")
+    point = POINT(int(x), int(y))
+    if not user32.ScreenToClient(hwnd, ctypes.byref(point)):
+        raise RuntimeError("无法将屏幕坐标换算为窗口坐标。")
+    _post_client_click(hwnd, point.x, point.y)
+
+
+def window_to_screen_xy(hwnd, x, y):
+    """Convert coordinates relative to the outer window rectangle to screen pixels."""
+    if not hwnd:
+        raise RuntimeError("坐标换算需要目标窗口。")
+    rect = RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        raise RuntimeError("无法读取目标窗口位置。")
+    return rect.left + int(x), rect.top + int(y)
+
+
+def post_click_window_xy(hwnd, x, y):
+    """Deliver a window-relative click and account for non-client borders."""
+    if not hwnd:
+        raise RuntimeError("窗口消息模式需要目标窗口。")
+    rect = RECT()
+    origin = POINT(0, 0)
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        raise RuntimeError("无法读取目标窗口位置。")
+    if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        raise RuntimeError("无法读取目标客户区原点。")
+    client_x = int(x) - (origin.x - rect.left)
+    client_y = int(y) - (origin.y - rect.top)
+    _post_client_click(hwnd, client_x, client_y)
 
 
 def post_key(hwnd, vk, is_down=True):
@@ -337,6 +467,6 @@ def find_window(hint):
 def focus_window(hwnd):
     if not hwnd:
         return False
-    user32.ShowWindow(hwnd, 5)
+    user32.ShowWindow(hwnd, 9 if user32.IsIconic(hwnd) else 5)
     time.sleep(0.1)
     return bool(user32.SetForegroundWindow(hwnd))

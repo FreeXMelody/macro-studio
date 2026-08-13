@@ -1,7 +1,6 @@
 import io
 import json
 import os
-import random
 import re
 import subprocess
 import sys
@@ -14,6 +13,10 @@ from dataclasses import asdict
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 from actions import ACTION_HELP_TEXT, ACTION_KINDS, TARGET_ACTION_KINDS, VALUE_ACTION_KINDS
+from backend.application.playlist_service import PlaylistService
+from backend.application.preset_service import PresetService
+from backend.application.sequence_runner import PreparedJob, SequenceRunner
+from backend.domain.runner import RunnerControl
 from automation import (
     KEY_CHOICES,
     VK_A,
@@ -77,8 +80,10 @@ class MacroStudio(tk.Tk):
         self.step_presets = self.load_step_presets(self.config_data.get("step_presets", []))
         self.active_step_preset = tk.StringVar(value=self.config_data.get("active_step_preset", ""))
         self.loaded_step_preset_name = self.active_step_preset.get()
-        playlist_data = load_json(PLAYLIST_PATH, [])
+        playlist_data = load_json(PLAYLIST_PATH, [], document_type="playlist")
         self.song_groups, active_song_group = self.load_song_groups(playlist_data)
+        self.playlist_service = PlaylistService(self.song_groups)
+        self.preset_service = PresetService(self.step_presets, self.song_groups)
         self.active_song_group = tk.StringVar(value=active_song_group)
         self.song_group_step_preset = tk.StringVar(value="")
         self.song_view_refs = []
@@ -86,9 +91,9 @@ class MacroStudio(tk.Tk):
         self.worker = None
         self.hotkey_thread = None
         self.hotkey_stop_event = threading.Event()
-        self.stop_event = threading.Event()
-        self.pause_event = threading.Event()
-        self.pause_event.set()
+        self.runner_control = RunnerControl()
+        self.stop_event = self.runner_control.stop_event
+        self.pause_event = self.runner_control.pause_event
         self.active_mode = tk.StringVar(value="playlist")
         self.playback_loop_var = tk.BooleanVar(value=bool(self.config_data.get("playback_loop", False)))
         self.playback_random_var = tk.BooleanVar(value=bool(self.config_data.get("playback_random", False)))
@@ -133,7 +138,7 @@ class MacroStudio(tk.Tk):
             pass
 
     def load_config(self):
-        data = load_json(CONFIG_PATH, None)
+        data = load_json(CONFIG_PATH, None, document_type="macro_config")
         if data:
             return data
         legacy = load_json(os.path.join(APP_DIR, "config.json"), {})
@@ -199,28 +204,19 @@ class MacroStudio(tk.Tk):
         return [SongGroup(name="默认", songs=songs, step_preset="")], "默认"
 
     def find_song_group(self, name):
-        return next((group for group in self.song_groups if group.name == name), None)
+        return self.playlist_service.find_group(name)
 
     def current_song_group(self):
-        group = self.find_song_group(self.active_song_group.get())
-        return group or self.song_groups[0]
+        return self.playlist_service.current_group(self.active_song_group.get())
 
     def is_all_songs_view(self):
         return self.active_song_group.get() == "全部"
 
     def current_songs(self):
-        if self.is_all_songs_view():
-            return [song for group in self.song_groups for song in group.songs]
-        return self.current_song_group().songs
+        return self.playlist_service.songs_for_view(self.active_song_group.get())
 
     def unique_song_group_name(self, base):
-        existing = {group.name for group in self.song_groups}
-        if base not in existing and base != "全部":
-            return base
-        index = 2
-        while f"{base} {index}" in existing:
-            index += 1
-        return f"{base} {index}"
+        return self.playlist_service.unique_group_name(base)
 
     def load_step_presets(self, data):
         presets = []
@@ -272,13 +268,13 @@ class MacroStudio(tk.Tk):
             return self.save_loaded_step_preset()
         return True
     def step_preset_names(self):
-        return [preset["name"] for preset in self.step_presets]
+        return self.preset_service.names()
 
     def find_step_preset(self, name):
-        return next((preset for preset in self.step_presets if preset["name"] == name), None)
+        return self.preset_service.find(name)
 
     def clone_steps(self, steps):
-        return [Step(name=step.name, kind=step.kind, target=step.target, value=step.value, enabled=step.enabled, wait_after=step.wait_after) for step in steps]
+        return self.preset_service.clone_steps(steps)
 
     def step_from_data(self, item):
         data = dict(item)
@@ -1256,7 +1252,7 @@ class MacroStudio(tk.Tk):
             return
         if self.steps and not messagebox.askyesno("新建预设", "新建空预设会清空当前动作序列编辑区，继续吗？"):
             return
-        self.step_presets.append({"name": name, "steps": []})
+        self.preset_service.create(name)
         self.active_step_preset.set(name)
         self.loaded_step_preset_name = name
         self.steps = []
@@ -1276,11 +1272,7 @@ class MacroStudio(tk.Tk):
         existing = self.find_step_preset(name)
         if existing and not messagebox.askyesno("覆盖预设", f"预设「{name}」已经存在，要覆盖吗？"):
             return
-        snapshot = self.clone_steps(self.steps)
-        if existing:
-            existing["steps"] = snapshot
-        else:
-            self.step_presets.append({"name": name, "steps": snapshot})
+        self.preset_service.save(name, self.steps)
         self.active_step_preset.set(name)
         self.loaded_step_preset_name = name
         self.persist()
@@ -1330,7 +1322,7 @@ class MacroStudio(tk.Tk):
         if self.find_step_preset(name):
             messagebox.showwarning("名称重复", "已经有同名动作预设。")
             return
-        self.step_presets.append({"name": name, "steps": self.clone_steps(preset["steps"])})
+        self.preset_service.copy(source_name, name)
         self.active_step_preset.set(name)
         self.persist()
         self.refresh_step_presets()
@@ -1355,26 +1347,14 @@ class MacroStudio(tk.Tk):
         if self.find_step_preset(new_name):
             messagebox.showwarning("名称重复", "已经有同名动作预设。")
             return
-        preset["name"] = new_name
-        for group in self.song_groups:
-            if group.step_preset == old_name:
-                group.step_preset = new_name
-            for song in group.songs:
-                if getattr(song, "step_preset", "") == old_name:
-                    song.step_preset = new_name
+        self.preset_service.rename(old_name, new_name)
         self.active_step_preset.set(new_name)
         self.persist()
         self.refresh_step_presets()
         self.refresh_songs()
         self.write_log(f"已重命名动作预设：{old_name} -> {new_name}")
     def unique_step_preset_name(self, base):
-        existing = set(self.step_preset_names())
-        if base not in existing:
-            return base
-        index = 2
-        while f"{base} {index}" in existing:
-            index += 1
-        return f"{base} {index}"
+        return self.preset_service.unique_name(base)
     def delete_step_preset(self):
         name = self.active_step_preset.get().strip()
         if not name:
@@ -1386,13 +1366,7 @@ class MacroStudio(tk.Tk):
             return
         if not messagebox.askyesno("删除预设", f"确定删除动作预设「{name}」吗？"):
             return
-        self.step_presets.remove(preset)
-        for group in self.song_groups:
-            if group.step_preset == name:
-                group.step_preset = ""
-            for song in group.songs:
-                if getattr(song, "step_preset", "") == name:
-                    song.step_preset = ""
+        self.preset_service.delete(name)
         self.active_step_preset.set("")
         self.persist()
         self.refresh_step_presets()
@@ -1478,9 +1452,9 @@ class MacroStudio(tk.Tk):
         name = simpledialog.askstring("新建歌曲组", "歌曲组名称：", parent=self)
         if not name:
             return
-        name = self.unique_song_group_name(name.strip())
-        self.song_groups.append(SongGroup(name=name, songs=[], step_preset=""))
-        self.active_song_group.set(name)
+        group = self.playlist_service.add_group(name)
+        name = group.name
+        self.active_song_group.set(group.name)
         self.persist()
         self.refresh_song_groups()
         self.refresh_songs()
@@ -1501,8 +1475,7 @@ class MacroStudio(tk.Tk):
         if name != group.name and self.find_song_group(name):
             messagebox.showwarning("名称重复", "已经有同名歌曲组。")
             return
-        old_name = group.name
-        group.name = name
+        old_name, name = self.playlist_service.rename_group(group, name)
         self.active_song_group.set(name)
         self.persist()
         self.refresh_song_groups()
@@ -1519,8 +1492,8 @@ class MacroStudio(tk.Tk):
         group = self.current_song_group()
         if not messagebox.askyesno("删除歌曲组", f"确定删除歌曲组「{group.name}」吗？其中歌曲会一起删除。"):
             return
-        self.song_groups.remove(group)
-        self.active_song_group.set(self.song_groups[0].name)
+        next_group = self.playlist_service.delete_group(group)
+        self.active_song_group.set(next_group.name)
         self.persist()
         self.refresh_song_groups()
         self.refresh_songs()
@@ -2672,8 +2645,7 @@ class MacroStudio(tk.Tk):
         if target_group is None or target_group is source_group:
             messagebox.showwarning("目标无效", "请输入另一个已有歌曲组名称。")
             return
-        moved_song = source_group.songs.pop(song_index)
-        target_group.songs.append(moved_song)
+        moved_song = self.playlist_service.move_song(source_group, song_index, target_group)
         self.active_song_group.set(target_group.name)
         self.persist()
         self.refresh_song_groups()
@@ -2688,10 +2660,9 @@ class MacroStudio(tk.Tk):
         if ref is None:
             return
         group, song_index, _song = ref
-        target = song_index + direction
-        if target < 0 or target >= len(group.songs):
+        target = self.playlist_service.move_song_within_group(group, song_index, direction)
+        if target == song_index:
             return
-        group.songs[song_index], group.songs[target] = group.songs[target], group.songs[song_index]
         moved_song = group.songs[target]
         self.persist()
         self.refresh_songs()
@@ -2726,19 +2697,11 @@ class MacroStudio(tk.Tk):
             "steps": [asdict(step) for step in self.steps],
             "image_targets": [asdict(target) for target in self.image_targets],
             "active_step_preset": self.active_step_preset.get() if hasattr(self, "active_step_preset") else "",
-            "step_presets": [
-                {"name": preset["name"], "steps": [asdict(step) for step in preset["steps"]]}
-                for preset in self.step_presets
-            ],
+            "step_presets": self.preset_service.to_data(),
         }
-        save_json(CONFIG_PATH, self.config_data)
-        save_json(PLAYLIST_PATH, {
-            "active_song_group": self.active_song_group.get() if hasattr(self, "active_song_group") else self.song_groups[0].name,
-            "song_groups": [
-                {"name": group.name, "step_preset": group.step_preset, "songs": [asdict(song) for song in group.songs]}
-                for group in self.song_groups
-            ],
-        })
+        save_json(CONFIG_PATH, self.config_data, document_type="macro_config")
+        active_group = self.active_song_group.get() if hasattr(self, "active_song_group") else self.song_groups[0].name
+        save_json(PLAYLIST_PATH, self.playlist_service.to_document(active_group), document_type="playlist")
         self.write_log("已保存。") if hasattr(self, "log") else None
     def check_window(self):
         window = find_window(self.window_hint.get())
@@ -2753,38 +2716,23 @@ class MacroStudio(tk.Tk):
         return INPUT_MODE_VALUES.get(self.input_mode_var.get(), "foreground")
 
     def current_song_jobs(self, enabled_only=False):
-        jobs = []
-        for group in self.song_groups:
-            if not self.is_all_songs_view() and group.name != self.active_song_group.get():
-                continue
-            for song in group.songs:
-                if enabled_only and not song.enabled:
-                    continue
-                jobs.append({"song": song, "group": group})
-        return jobs
+        return self.playlist_service.jobs_for_view(self.active_song_group.get(), enabled_only=enabled_only)
 
     def steps_for_song(self, song, group):
-        song_preset = getattr(song, "step_preset", "")
-        preset = self.find_step_preset(song_preset) if song_preset else None
-        if preset:
-            return preset["steps"], f"单曲:{song_preset}"
-        group_preset = getattr(group, "step_preset", "")
-        preset = self.find_step_preset(group_preset) if group_preset else None
-        if preset:
-            return preset["steps"], f"歌曲组:{group_preset}"
-        return self.steps, "当前动作序列"
+        return self.preset_service.resolve_steps(song, group, self.steps)
 
     def start_single(self):
         ref = self.selected_song_ref()
         if ref is not None:
             group, _song_index, song = ref
-            self.start_worker([{"song": song, "group": group}])
+            self.start_worker([self.playlist_service.job(song, group)])
             return
         jobs = self.current_song_jobs(enabled_only=True)
         if jobs:
             self.start_worker([jobs[0]])
         else:
-            self.start_worker([{"song": Song(title="", keyword="", duration_seconds=0, buffer_seconds=0, enabled=True), "group": self.current_song_group()}])
+            song = Song(title="", keyword="", duration_seconds=0, buffer_seconds=0, enabled=True)
+            self.start_worker([self.playlist_service.job(song, self.current_song_group())])
 
     def start_playlist(self):
         self.persist()
@@ -2794,7 +2742,7 @@ class MacroStudio(tk.Tk):
             return
         loop_enabled = self.playback_loop_var.get()
         random_enabled = self.playback_random_var.get()
-        names = "、".join(job["song"].title for job in jobs[:5])
+        names = "、".join(job.song.title for job in jobs[:5])
         suffix = "..." if len(jobs) > 5 else ""
         modes = []
         if random_enabled:
@@ -2811,98 +2759,90 @@ class MacroStudio(tk.Tk):
             messagebox.showinfo("正在运行", "动作序列已经在运行。")
             return
         self.persist()
-        self.stop_event.clear()
-        self.pause_event.set()
+        self.runner_control.reset()
         self.worker = threading.Thread(target=self.run_sequence_worker, args=(jobs, loop_enabled, random_enabled), daemon=True)
         self.worker.start()
 
     def stop_playback(self):
-        self.stop_event.set()
-        self.pause_event.set()
+        self.runner_control.request_stop()
         self.write_log("已请求停止。")
 
     def toggle_pause(self):
         if self.pause_event.is_set():
-            self.pause_event.clear()
-            self.write_log("已暂停。")
+            if self.runner_control.pause():
+                self.write_log("已暂停。")
         else:
-            self.pause_event.set()
-            self.write_log("继续。")
+            if self.runner_control.resume():
+                self.write_log("继续。")
 
     def run_sequence_worker(self, jobs, loop_enabled=False, random_enabled=False):
-        cycle = 0
-        while not self.stop_event.is_set():
-            cycle += 1
-            cycle_jobs = list(jobs)
-            if random_enabled:
-                random.shuffle(cycle_jobs)
-            total_songs = len(cycle_jobs)
-            if loop_enabled or random_enabled:
-                order = "、".join(job["song"].title for job in cycle_jobs[:5])
-                suffix = "..." if len(cycle_jobs) > 5 else ""
-                self.after(0, lambda c=cycle, o=order, s=suffix: self.write_log(f"第 {c} 轮顺序：{o}{s}"))
-            for song_index, job in enumerate(cycle_jobs, start=1):
-                if self.stop_event.is_set():
-                    break
-                song = job["song"]
-                group = job["group"]
-                steps, preset_label = self.steps_for_song(song, group)
-                self.points = self.current_points()
-                point_map = {point.name: point for point in self.points}
-                input_mode = self.current_input_mode()
-                needs_window = self.focus_var.get() or input_mode == "window_message"
-                window = find_window(self.window_hint.get()) if needs_window else None
-                if needs_window and not window:
-                    self.after(0, lambda: self.write_log("运行失败：找不到目标窗口。"))
-                    self.stop_event.set()
-                    break
-                if window and self.focus_var.get():
-                    focus_window(window["hwnd"])
-                label = song.title if song else "单次运行"
-                prefix = f"第 {cycle} 轮 " if loop_enabled else ""
-                self.after(0, lambda l=label, i=song_index, t=total_songs, p=prefix, g=group.name, preset=preset_label: self.write_log(f"开始 {p}{i}/{t}: {l} [{g} / {preset}]"))
-                step_index = 0
-                image_rollbacks = {}
-                while step_index < len(steps):
-                    if self.stop_event.is_set():
-                        break
-                    step = steps[step_index]
-                    if not step.enabled:
-                        step_index += 1
-                        continue
-                    self.pause_event.wait()
-                    try:
-                        self.execute_step(step, point_map, song, window)
-                        step_index += 1
-                    except Exception as exc:
-                        previous_image = next((index for index in range(step_index - 1, -1, -1) if steps[index].enabled and steps[index].kind == "image_click"), None)
-                        attempts = image_rollbacks.get(step_index, 0)
-                        if step.kind == "image_click" and attempts < 2:
-                            image_rollbacks[step_index] = attempts + 1
-                            recovery_index = previous_image if previous_image is not None else step_index
-                            if previous_image is not None:
-                                self.after(0, lambda s=step, p=steps[previous_image], n=attempts + 1: self.write_log(f"图像识别失败「{s.name}」，回退重试「{p.name}」({n}/2)。"))
-                            else:
-                                self.after(0, lambda s=step, n=attempts + 1: self.write_log(f"图像识别失败「{s.name}」，重新识别当前动作 ({n}/2)。"))
-                            step_index = recovery_index
-                            continue
-                        self.after(0, lambda e=exc, s=step: self.write_log(f"动作失败「{s.name}」：{e}"))
-                        self.stop_event.set()
-                        break
-                if self.stop_event.is_set():
-                    break
-                self.after(0, lambda l=label, i=song_index, t=total_songs, p=prefix: self.write_log(f"完成 {p}{i}/{t}: {l}"))
-                if song_index < total_songs:
-                    self.after(0, lambda i=song_index + 1, t=total_songs, p=prefix: self.write_log(f"准备下一首 {p}{i}/{t}"))
-                    self.wait_interruptible(1)
-            if self.stop_event.is_set() or not loop_enabled:
-                break
-            self.after(0, lambda c=cycle + 1: self.write_log(f"循环播放：准备第 {c} 轮"))
-            self.wait_interruptible(1)
-        if self.stop_event.is_set():
-            self.after(0, lambda: self.write_log("动作序列已停止。"))
-        else:
-            self.after(0, lambda: self.write_log("动作序列结束。"))
+        runner = SequenceRunner(
+            control=self.runner_control,
+            prepare_job=self.prepare_runner_job,
+            execute_step=self.execute_runner_step,
+            emit=self.handle_runner_event,
+        )
+        runner.run(jobs, loop_enabled=loop_enabled, random_enabled=random_enabled)
+
+    def prepare_runner_job(self, job):
+        song = job.song
+        group = job.group
+        steps, preset_label = self.steps_for_song(song, group)
+        self.points = self.current_points()
+        point_map = {point.name: point for point in self.points}
+        input_mode = self.current_input_mode()
+        needs_window = self.focus_var.get() or input_mode == "window_message"
+        window = find_window(self.window_hint.get()) if needs_window else None
+        if needs_window and not window:
+            raise RuntimeError("找不到目标窗口。")
+        if window and self.focus_var.get():
+            focus_window(window["hwnd"])
+        return PreparedJob(
+            steps=steps,
+            label=song.title if song else "单次运行",
+            group_name=group.name,
+            preset_label=preset_label,
+            context={"point_map": point_map, "window": window},
+        )
+
+    def execute_runner_step(self, step, job, prepared):
+        context = prepared.context
+        self.execute_step(step, context["point_map"], job.song, context["window"])
+
+    def handle_runner_event(self, event):
+        data = event.data
+        message = None
+        if event.kind == "cycle.order":
+            titles = list(data["titles"])
+            order = "、".join(titles[:5])
+            suffix = "..." if len(titles) > 5 else ""
+            message = f"第 {data['cycle']} 轮顺序：{order}{suffix}"
+        elif event.kind == "song.started":
+            prefix = f"第 {data['cycle']} 轮 " if data["loop"] else ""
+            message = f"开始 {prefix}{data['index']}/{data['total']}: {data['label']} [{data['group']} / {data['preset']}]"
+        elif event.kind == "step.recovering":
+            if data["rollback"]:
+                message = f"图像识别失败「{data['name']}」，回退重试「{data['recovery_name']}」({data['attempt']}/{data['limit']})。"
+            else:
+                message = f"图像识别失败「{data['name']}」，重新识别当前动作 ({data['attempt']}/{data['limit']})。"
+        elif event.kind == "step.failed":
+            message = f"动作失败「{data['name']}」：{data['error']}"
+        elif event.kind == "runner.prepare_failed":
+            message = f"运行失败：{data['error']}"
+        elif event.kind == "song.completed":
+            prefix = f"第 {data['cycle']} 轮 " if data["loop"] else ""
+            message = f"完成 {prefix}{data['index']}/{data['total']}: {data['label']}"
+        elif event.kind == "song.next":
+            prefix = f"第 {data['cycle']} 轮 " if data["loop"] else ""
+            message = f"准备下一首 {prefix}{data['index']}/{data['total']}"
+        elif event.kind == "cycle.next":
+            message = f"循环播放：准备第 {data['cycle']} 轮"
+        elif event.kind in {"runner.stopped", "runner.failed"}:
+            message = "动作序列已停止。"
+        elif event.kind == "runner.completed":
+            message = "动作序列结束。"
+        if message is not None:
+            self.after(0, lambda value=message: self.write_log(value))
     def execute_step(self, step, point_map, song, window=None):
         kind = step.kind
         message_hwnd = window["hwnd"] if self.current_input_mode() == "window_message" and window else None
@@ -3013,21 +2953,7 @@ class MacroStudio(tk.Tk):
             self.wait_interruptible(seconds)
         time.sleep(0.18 if message_hwnd else 0.08)
     def wait_interruptible(self, seconds):
-        remaining = max(0, seconds)
-        last_tick = time.time()
-        while remaining > 0:
-            if self.stop_event.is_set():
-                return False
-            if not self.pause_event.is_set():
-                self.pause_event.wait(0.2)
-                last_tick = time.time()
-                continue
-            time.sleep(min(0.2, remaining))
-            now = time.time()
-            remaining -= now - last_tick
-            last_tick = now
-        return True
-
+        return self.runner_control.wait(seconds)
     def write_log(self, message):
         stamp = time.strftime("%H:%M:%S")
         self.log.insert(tk.END, f"[{stamp}] {message}\n")

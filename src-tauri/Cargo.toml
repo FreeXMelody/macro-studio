@@ -1,0 +1,25 @@
+[package]
+name = "macro-studio"
+version = "0.1.0"
+description = "A programmable Windows automation studio"
+authors = ["FreeXMelody"]
+license = "MIT"
+repository = "https://github.com/FreeXMelody/macro-studio"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "macro_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2.11.3", features = [] }
+
+[profile.dev]
+debug = 0
+incremental = true

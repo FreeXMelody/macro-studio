@@ -1,6 +1,9 @@
 # Runtime state
 macro_config.json
 playlist.json
+macro_config.json.bak
+macro_config.before-*.json
+playlist.json.bak
 config.json
 image_templates/
 
@@ -26,3 +29,14 @@ stage_qrcodes/
 stage_capture_*.json
 window_capture_tests/
 ngwebview_ida_scan.json
+
+# Node and Tauri
+node_modules/
+frontend/node_modules/
+frontend/dist/
+src-tauri/target/
+src-tauri/sidecars/*.exe
+output/playwright/
+output/*.log
+.playwright-cli/
+.cargo-target

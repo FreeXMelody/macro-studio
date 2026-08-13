@@ -4,3 +4,5 @@ Pillow>=10.0
 qrcode[pil]>=8.2
 windows-capture>=2.0
 pydivert>=3.1,<4
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
