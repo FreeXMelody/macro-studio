@@ -426,6 +426,8 @@ function imageTargetFromForm(name: string, templatePath: string): ImageTargetDto
     offset_x: Math.round(Number(imageForm.value.offset_x) || 0),
     offset_y: Math.round(Number(imageForm.value.offset_y) || 0),
     retry_seconds: Math.max(0, Number(imageForm.value.retry_seconds) || 0),
+    retry_attempts: Math.max(1, Math.round(Number(imageForm.value.retry_attempts) || 1)),
+    retry_interval: Math.max(0, Number(imageForm.value.retry_interval) || 0),
   }
 }
 
@@ -679,6 +681,8 @@ function emptyImageTarget(): ImageTargetDto {
     offset_x: 0,
     offset_y: 0,
     retry_seconds: 3,
+    retry_attempts: 5,
+    retry_interval: 0.25,
   }
 }
 
@@ -830,7 +834,7 @@ onBeforeUnmount(() => {
                 @click="selectedImageIndex = index"
               >
                 <span class="image-target-icon"><ImageIcon :size="16" /></span>
-                <span><strong>{{ target.name }}</strong><small>{{ matchModeLabels[target.match_mode] }} · 阈值 {{ target.threshold.toFixed(2) }} · {{ target.retry_seconds }}s</small></span>
+                <span><strong>{{ target.name }}</strong><small>{{ matchModeLabels[target.match_mode] }} · 阈值 {{ target.threshold.toFixed(2) }} · 最多 {{ target.retry_attempts }} 次</small></span>
               </button>
             </div>
           </aside>
@@ -871,7 +875,9 @@ onBeforeUnmount(() => {
                 <div><dt>识别阈值</dt><dd>{{ selectedImage.threshold.toFixed(2) }}</dd></div>
                 <div v-if="selectedUsesEdges" title="Canny 双阈值：低值影响弱轮廓，高值筛选强轮廓"><dt>边缘阈值</dt><dd>{{ selectedImage.edge_low }} / {{ selectedImage.edge_high }}</dd></div>
                 <div><dt>点击偏移</dt><dd>{{ selectedImage.offset_x }}, {{ selectedImage.offset_y }}</dd></div>
-                <div><dt>最大重试时长</dt><dd>{{ selectedImage.retry_seconds }} 秒</dd></div>
+                <div><dt>最多尝试</dt><dd>{{ selectedImage.retry_attempts }} 次</dd></div>
+                <div><dt>重试间隔</dt><dd>{{ selectedImage.retry_interval }} 秒</dd></div>
+                <div><dt>最长时限</dt><dd>{{ selectedImage.retry_seconds }} 秒</dd></div>
                 <div class="wide"><dt>模板文件</dt><dd>{{ selectedImage.template_path }}</dd></div>
               </dl>
             </div>
@@ -959,7 +965,9 @@ onBeforeUnmount(() => {
                 <div class="form-section-title"><div><strong>识别与点击</strong><span>偏移以匹配框中心为基准</span></div></div>
                 <div class="image-settings-grid">
                   <label class="form-field">识别阈值 <output>{{ imageForm.threshold.toFixed(2) }}</output><input v-model.number="imageForm.threshold" class="range-input" min="0" max="1" step="0.01" type="range" /></label>
-                  <label class="form-field">最大重试时长（秒）<input v-model.number="imageForm.retry_seconds" min="0" step="0.5" type="number" /></label>
+                  <label class="form-field">最多尝试次数<input v-model.number="imageForm.retry_attempts" min="1" max="100" step="1" type="number" /></label>
+                  <label class="form-field">重试间隔（秒）<input v-model.number="imageForm.retry_interval" min="0" max="30" step="0.05" type="number" /></label>
+                  <label class="form-field">最长重试时限（秒）<input v-model.number="imageForm.retry_seconds" min="0" max="120" step="0.5" type="number" /></label>
                   <label class="form-field wide-setting">点击位置<AppSelect :model-value="clickPreset" :options="clickPresetOptions" label="点击位置" @update:model-value="applyClickPreset" /></label>
                   <label class="form-field">水平偏移<input v-model.number="imageForm.offset_x" type="number" @input="onOffsetInput" /></label>
                   <label class="form-field">垂直偏移<input v-model.number="imageForm.offset_y" type="number" @input="onOffsetInput" /></label>

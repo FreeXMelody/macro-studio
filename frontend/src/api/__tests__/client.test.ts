@@ -46,7 +46,17 @@ describe('MacroStudioClient', () => {
     const presets = [
       {
         name: '播放流程',
-        steps: [{ name: '等待', kind: 'wait', target: '', value: '1', enabled: true, wait_after: '' }],
+        steps: [{
+          name: '等待',
+          kind: 'wait',
+          target: '',
+          value: '1',
+          enabled: true,
+          wait_after: '',
+          failure_policy: 'stop' as const,
+          failure_retries: 2,
+          verify_target: '',
+        }],
       },
     ]
     const fetchMock = vi.fn().mockResolvedValue(

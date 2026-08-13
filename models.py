@@ -44,6 +44,8 @@ class ImageTarget:
     offset_x: int = 0
     offset_y: int = 0
     retry_seconds: float = 3.0
+    retry_attempts: int = 5
+    retry_interval: float = 0.25
 
 
 @dataclass
@@ -54,3 +56,6 @@ class Step:
     value: str = ""
     enabled: bool = True
     wait_after: str = ""
+    failure_policy: str = ""
+    failure_retries: int = 2
+    verify_target: str = ""

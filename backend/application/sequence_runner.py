@@ -125,7 +125,7 @@ class SequenceRunner:
     def _run_steps(self, job, prepared):
         steps = list(prepared.steps)
         step_index = 0
-        image_recoveries = {}
+        recoveries = {}
         while step_index < len(steps):
             if self.control.should_stop() or not self.control.wait_until_runnable():
                 return None
@@ -141,43 +141,81 @@ class SequenceRunner:
                 self._emit("step.completed", index=step_index, name=step.name, action=step.kind)
                 step_index += 1
             except Exception as exc:
-                previous_image = next(
-                    (
-                        index
-                        for index in range(step_index - 1, -1, -1)
-                        if getattr(steps[index], "enabled", True) and steps[index].kind == "image_click"
-                    ),
-                    None,
-                )
-                attempts = image_recoveries.get(step_index, 0)
-                if step.kind == "image_click" and attempts < self.image_recovery_limit:
+                policy = self._failure_policy(step)
+                if policy == "skip":
+                    self._emit(
+                        "step.skipped",
+                        index=step_index,
+                        name=step.name,
+                        action=step.kind,
+                        policy=policy,
+                        error=str(exc),
+                    )
+                    step_index += 1
+                    continue
+
+                attempts = recoveries.get(step_index, 0)
+                limit = self._failure_limit(step)
+                if policy in {"retry_step", "previous_image"} and attempts < limit:
                     attempt = attempts + 1
-                    image_recoveries[step_index] = attempt
-                    recovery_index = previous_image if previous_image is not None else step_index
+                    recoveries[step_index] = attempt
+                    recovery_index = step_index
+                    if policy == "previous_image":
+                        previous_image = next(
+                            (
+                                index
+                                for index in range(step_index - 1, -1, -1)
+                                if getattr(steps[index], "enabled", True)
+                                and steps[index].kind == "image_click"
+                            ),
+                            None,
+                        )
+                        if previous_image is not None:
+                            recovery_index = previous_image
                     self._emit(
                         "step.recovering",
                         index=step_index,
                         name=step.name,
+                        action=step.kind,
+                        policy=policy,
                         recovery_index=recovery_index,
                         recovery_name=steps[recovery_index].name,
-                        rollback=previous_image is not None,
+                        rollback=recovery_index != step_index,
                         attempt=attempt,
-                        limit=self.image_recovery_limit,
+                        limit=limit,
                         error=str(exc),
                     )
                     step_index = recovery_index
                     continue
+
                 self._emit(
                     "step.failed",
                     index=step_index,
                     name=step.name,
                     action=step.kind,
+                    policy=policy,
+                    attempts=attempts,
+                    limit=limit,
                     error=str(exc),
                 )
                 self.control.request_stop()
                 return exc
         return None
 
+    def _failure_policy(self, step):
+        policy = str(getattr(step, "failure_policy", "") or "").strip()
+        if not policy:
+            return "previous_image" if getattr(step, "kind", "") == "image_click" else "stop"
+        if policy not in {"stop", "skip", "retry_step", "previous_image"}:
+            return "stop"
+        return policy
+
+    def _failure_limit(self, step):
+        value = getattr(step, "failure_retries", self.image_recovery_limit)
+        try:
+            return max(0, min(20, int(value)))
+        except (TypeError, ValueError):
+            return self.image_recovery_limit
     def _emit(self, kind, **data):
         try:
             self.emit(RunnerEvent(kind=kind, status=self.control.status, data=data))

@@ -27,7 +27,8 @@ function eventLabel(event: RunnerEvent) {
     'step.started': `执行：${String(event.data.name || '')}`,
     'step.completed': `完成动作：${String(event.data.name || '')}`,
     'step.failed': `动作失败：${String(event.data.name || '')}`,
-    'step.recovering': `重试动作：${String(event.data.name || '')}`,
+    'step.recovering': `恢复动作：${String(event.data.name || '')}`,
+    'step.skipped': `已跳过动作：${String(event.data.name || '')}`,
     'cycle.order': '播放顺序已生成',
     'cycle.next': '开始下一轮',
     'command.failed': '命令执行失败',
@@ -45,8 +46,11 @@ function eventDetail(event: RunnerEvent) {
   if (event.type === 'step.recovering') {
     const attempt = Number(event.data.attempt || 0)
     const limit = Number(event.data.limit || 0)
-    const rollback = event.data.rollback ? `，回退到「${String(event.data.recovery_name || '')}」` : ''
+    const rollback = event.data.rollback ? `，回退到「${String(event.data.recovery_name || '')}」` : '，重试当前动作'
     return `第 ${attempt}/${limit} 次${rollback}${error ? `：${error}` : ''}`
+  }
+  if (event.type === 'step.skipped') {
+    return error ? `失败策略：跳过；${error}` : '失败策略：跳过'
   }
   if (error) return error
   if (event.type === 'song.started') {

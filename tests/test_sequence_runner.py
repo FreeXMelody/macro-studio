@@ -128,6 +128,47 @@ class SequenceRunnerTests(unittest.TestCase):
         self.assertEqual(recovery.data["recovery_name"], "image-a")
         self.assertEqual(status, RunnerStatus.COMPLETED)
 
+    def test_retry_step_policy_retries_only_current_step(self):
+        calls = []
+        failures = 0
+
+        def execute(step, _job, _prepared):
+            nonlocal failures
+            calls.append(step.name)
+            if step.name == "unstable" and failures < 2:
+                failures += 1
+                raise RuntimeError("not ready")
+
+        steps = [
+            Step("before", "click"),
+            Step("unstable", "click", failure_policy="retry_step", failure_retries=2),
+            Step("after", "click"),
+        ]
+        status, events, _control = self.run_steps(steps, execute)
+
+        self.assertEqual(calls, ["before", "unstable", "unstable", "unstable", "after"])
+        self.assertEqual(status, RunnerStatus.COMPLETED)
+        recoveries = [event for event in events if event.kind == "step.recovering"]
+        self.assertEqual([event.data["rollback"] for event in recoveries], [False, False])
+
+    def test_skip_policy_continues_with_next_step(self):
+        calls = []
+
+        def execute(step, _job, _prepared):
+            calls.append(step.name)
+            if step.name == "optional":
+                raise RuntimeError("missing")
+
+        steps = [
+            Step("optional", "image_click", failure_policy="skip"),
+            Step("after", "click"),
+        ]
+        status, events, control = self.run_steps(steps, execute)
+
+        self.assertEqual(calls, ["optional", "after"])
+        self.assertEqual(status, RunnerStatus.COMPLETED)
+        self.assertFalse(control.should_stop())
+        self.assertIn("step.skipped", [event.kind for event in events])
     def test_exhausted_recovery_fails_and_requests_stop(self):
         calls = []
 

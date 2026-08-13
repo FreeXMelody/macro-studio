@@ -125,6 +125,8 @@ class CatalogService:
                 step.target = point_renames[step.target]
             if step.kind == "image_click" and step.value in image_target_renames:
                 step.value = image_target_renames[step.value]
+            if step.verify_target in image_target_renames:
+                step.verify_target = image_target_renames[step.verify_target]
 
         with self._lock:
             for step in self.current_steps:

@@ -161,6 +161,9 @@ class LocalApiTests(unittest.TestCase):
                         "value": "搜索按钮图像",
                         "enabled": True,
                         "wait_after": "0.5",
+                        "failure_policy": "previous_image",
+                        "failure_retries": 3,
+                        "verify_target": "搜索结果图像",
                     }
                 ],
             }
@@ -172,6 +175,9 @@ class LocalApiTests(unittest.TestCase):
         step = loaded.json()[0]["steps"][0]
         self.assertEqual(step["kind"], "image_click")
         self.assertEqual(step["value"], "搜索按钮图像")
+        self.assertEqual(step["failure_policy"], "previous_image")
+        self.assertEqual(step["failure_retries"], 3)
+        self.assertEqual(step["verify_target"], "搜索结果图像")
         self.assertEqual(catalog.presets_document()[0]["steps"][0]["kind"], "image_click")
     def test_playlist_update_rejects_invalid_group_names(self):
         app, _catalog, _runner = self.make_stack()

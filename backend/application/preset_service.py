@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from models import Step
 
@@ -16,7 +16,7 @@ class PresetService:
 
     @staticmethod
     def clone_steps(steps):
-        return [Step(name=step.name, kind=step.kind, target=step.target, value=step.value, enabled=step.enabled, wait_after=step.wait_after) for step in steps]
+        return [replace(step) for step in steps]
 
     def unique_name(self, base):
         base = str(base or "").strip() or "新动作预设"

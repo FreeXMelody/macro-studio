@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 
+from backend.application.catalog_service import CatalogService
 from backend.application.playlist_service import PlaylistService
 from backend.application.preset_service import PresetService
 from backend.infrastructure.json_storage import CURRENT_SCHEMA_VERSION, load_json, save_json
@@ -79,6 +80,24 @@ class PresetServiceTests(unittest.TestCase):
         preset = self.service.save("New", source)
         source[0].name = "changed"
         self.assertEqual(preset["steps"][0].name, "one")
+
+
+class CatalogServiceTests(unittest.TestCase):
+    def test_image_target_rename_updates_click_and_verification_references(self):
+        current = [Step("open", "image_click", value="old", verify_target="old")]
+        preset_step = Step("verify", "image_click", value="other", verify_target="old")
+        service = CatalogService(
+            [SongGroup("G", [])],
+            [{"name": "Preset", "steps": [preset_step]}],
+            current_steps=current,
+        )
+
+        service.replace_target_references(image_target_renames={"old": "new"})
+
+        self.assertEqual(current[0].value, "new")
+        self.assertEqual(current[0].verify_target, "new")
+        self.assertEqual(preset_step.value, "other")
+        self.assertEqual(preset_step.verify_target, "new")
 
 
 class JsonStorageTests(unittest.TestCase):

@@ -101,6 +101,8 @@ def parse_execution_settings(document, base_dir=None):
             offset_x=int(item.get("offset_x", 0)),
             offset_y=int(item.get("offset_y", 0)),
             retry_seconds=max(0.0, float(item.get("retry_seconds", 3.0))),
+            retry_attempts=max(1, int(item.get("retry_attempts", 5))),
+            retry_interval=max(0.0, float(item.get("retry_interval", 0.25))),
         )
 
     input_mode = str(data.get("input_mode", "foreground")).strip()
@@ -177,7 +179,7 @@ class WindowsActionExecutor:
         if kind == "click":
             self._click_point(step.target, context)
         elif kind == "image_click":
-            self._click_image(value, context)
+            self._click_image(value, context, getattr(step, "verify_target", ""))
         elif kind == "paste":
             self._paste(value or getattr(song, "keyword", "") or getattr(song, "title", ""), context)
         elif kind == "wait":
@@ -264,76 +266,9 @@ class WindowsActionExecutor:
         self._preview_click(name, point.x, point.y, context, window_relative=False)
         self._log(f"点击点位：{name}，坐标 {point.x}, {point.y}")
 
-    def _click_image(self, name, context):
-        target = context.settings.image_targets.get(name)
-        if not target:
-            available = "、".join(context.settings.image_targets) or "暂无图像目标"
-            raise RuntimeError(f"图像目标不存在：{name or '未填写'}。当前可用：{available}")
-        retry_seconds = max(0.0, float(target.retry_seconds))
-        region_label = target.region or "全窗口"
-        source_label = "后台窗口" if context.message_hwnd else "屏幕"
-        self._log(
-            f"识别图像目标：{target.name}；来源 {source_label}；模式 {target.match_mode}；"
-            f"阈值 {target.threshold:.3f}；范围 {region_label}；最大重试 {retry_seconds:.1f} 秒"
-        )
-        started_at = time.monotonic()
-        deadline = started_at + retry_seconds
-        attempts = 0
-        match = None
-        best_score = None
-        while not self.control.should_stop():
-            attempts += 1
-            try:
-                if context.message_hwnd:
-                    match = self.bindings.locate_template_in_window(
-                        target.template_path,
-                        context.message_hwnd,
-                        target.region,
-                        target.threshold,
-                        target.match_mode,
-                        target.mask_path,
-                        target.edge_low,
-                        target.edge_high,
-                    )
-                else:
-                    match = self.bindings.locate_template(
-                        target.template_path,
-                        target.region,
-                        target.threshold,
-                        target.match_mode,
-                        target.mask_path,
-                        target.edge_low,
-                        target.edge_high,
-                    )
-                break
-            except Exception as exc:
-                now = time.monotonic()
-                elapsed = max(0.0, now - started_at)
-                result = exc.result if isinstance(exc, MatchFailure) else None
-                if result is not None:
-                    score = float(result.score)
-                    best_score = score if best_score is None else max(best_score, score)
-                    self._log(
-                        f"图像识别尝试 {attempts} 未命中：{target.name}；"
-                        f"相似度 {score:.3f} / 阈值 {target.threshold:.3f}；耗时 {elapsed:.2f} 秒"
-                    )
-                else:
-                    self._log(
-                        f"图像识别尝试 {attempts} 失败：{target.name}；{exc}；耗时 {elapsed:.2f} 秒"
-                    )
-                remaining = deadline - now
-                if remaining <= 0:
-                    score_summary = (
-                        f"；本轮最高相似度 {best_score:.3f} / 阈值 {target.threshold:.3f}"
-                        if best_score is not None
-                        else ""
-                    )
-                    raise RuntimeError(
-                        f"图像目标识别失败：{target.name}；实际尝试 {attempts} 次；"
-                        f"实际耗时 {elapsed:.2f} 秒{score_summary}；最后错误：{exc}"
-                    ) from exc
-                self.control.wait(min(0.25, remaining))
-
+    def _click_image(self, name, context, verify_target_name=""):
+        target = self._image_target(name, context)
+        match = self._locate_image_target(target, context, "点击目标")
         if match is None or self.control.should_stop():
             return
 
@@ -362,6 +297,116 @@ class WindowsActionExecutor:
             f"图像命中并点击：{target.name} ({match.score:.3f})，坐标 {click_x}, {click_y}"
         )
 
+        verify_name = str(verify_target_name or "").strip()
+        if verify_name and not self.control.should_stop():
+            verify_target = self._image_target(verify_name, context)
+            self._log(f"开始点击后验证：等待图像目标「{verify_target.name}」出现")
+            verified = self._locate_image_target(verify_target, context, "点击后验证")
+            if verified is not None and not self.control.should_stop():
+                self._log(
+                    f"点击后验证通过：{verify_target.name} ({verified.score:.3f})，"
+                    f"坐标 {verified.x}, {verified.y}"
+                )
+
+    @staticmethod
+    def _image_target(name, context):
+        target_name = str(name or "").strip()
+        target = context.settings.image_targets.get(target_name)
+        if target:
+            return target
+        available = "、".join(context.settings.image_targets) or "暂无图像目标"
+        raise RuntimeError(f"图像目标不存在：{target_name or '未填写'}。当前可用：{available}")
+
+    def _locate_image_target(self, target, context, purpose):
+        retry_seconds = max(0.0, float(target.retry_seconds))
+        retry_attempts = max(1, int(target.retry_attempts))
+        retry_interval = max(0.0, float(target.retry_interval))
+        region_label = target.region or "全窗口"
+        source_label = "后台窗口" if context.message_hwnd else "屏幕"
+        self._log(
+            f"{purpose}识别：{target.name}；来源 {source_label}；模式 {target.match_mode}；"
+            f"阈值 {target.threshold:.3f}；范围 {region_label}；最多 {retry_attempts} 次；"
+            f"间隔 {retry_interval:.2f} 秒；最长 {retry_seconds:.1f} 秒"
+        )
+        started_at = time.monotonic()
+        deadline = started_at + retry_seconds
+        attempts = 0
+        best_score = None
+        last_error = None
+
+        while attempts < retry_attempts and not self.control.should_stop():
+            attempts += 1
+            try:
+                if context.message_hwnd:
+                    match = self.bindings.locate_template_in_window(
+                        target.template_path,
+                        context.message_hwnd,
+                        target.region,
+                        target.threshold,
+                        target.match_mode,
+                        target.mask_path,
+                        target.edge_low,
+                        target.edge_high,
+                    )
+                else:
+                    match = self.bindings.locate_template(
+                        target.template_path,
+                        target.region,
+                        target.threshold,
+                        target.match_mode,
+                        target.mask_path,
+                        target.edge_low,
+                        target.edge_high,
+                    )
+                elapsed = max(0.0, time.monotonic() - started_at)
+                self._log(
+                    f"{purpose}识别命中：{target.name}；第 {attempts}/{retry_attempts} 次；"
+                    f"相似度 {match.score:.3f} / 阈值 {target.threshold:.3f}；耗时 {elapsed:.2f} 秒"
+                )
+                return match
+            except Exception as exc:
+                last_error = exc
+                now = time.monotonic()
+                elapsed = max(0.0, now - started_at)
+                result = exc.result if isinstance(exc, MatchFailure) else None
+                if result is not None:
+                    score = float(result.score)
+                    best_score = score if best_score is None else max(best_score, score)
+                    self._log(
+                        f"{purpose}识别尝试 {attempts}/{retry_attempts} 未命中：{target.name}；"
+                        f"相似度 {score:.3f} / 阈值 {target.threshold:.3f}；耗时 {elapsed:.2f} 秒"
+                    )
+                else:
+                    self._log(
+                        f"{purpose}识别尝试 {attempts}/{retry_attempts} 失败：{target.name}；"
+                        f"{exc}；耗时 {elapsed:.2f} 秒"
+                    )
+
+                attempts_exhausted = attempts >= retry_attempts
+                time_exhausted = retry_seconds <= 0 or now >= deadline
+                if attempts_exhausted or time_exhausted:
+                    reason = "达到最多尝试次数" if attempts_exhausted else "达到最长重试时长"
+                    score_summary = (
+                        f"；本轮最高相似度 {best_score:.3f} / 阈值 {target.threshold:.3f}"
+                        if best_score is not None
+                        else ""
+                    )
+                    raise RuntimeError(
+                        f"{purpose}识别失败：{target.name}；实际尝试 {attempts}/{retry_attempts} 次；"
+                        f"实际耗时 {elapsed:.2f} 秒；{reason}{score_summary}；最后错误：{exc}"
+                    ) from exc
+
+                remaining = max(0.0, deadline - now)
+                wait_seconds = min(retry_interval, remaining)
+                if wait_seconds > 0 and not self.control.wait(wait_seconds):
+                    return None
+
+        if self.control.should_stop():
+            return None
+        raise RuntimeError(
+            f"{purpose}识别失败：{target.name}；实际尝试 {attempts}/{retry_attempts} 次；"
+            f"最后错误：{last_error or '未知错误'}"
+        )
     def _preview_click(self, name, x, y, context, window_relative):
         if not context.settings.preview_clicks or self.point_visualizer is None:
             return

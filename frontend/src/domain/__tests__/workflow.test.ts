@@ -23,6 +23,8 @@ describe('workflow domain helpers', () => {
     expect(actionType('wait').needsTarget).toBeUndefined()
     expect(actionType('wait').needsValue).toBe(true)
     expect(emptyStep('enter').value).toBe('')
+    expect(emptyStep('image_click').failure_policy).toBe('previous_image')
+    expect(emptyStep('image_click').failure_retries).toBe(2)
   })
 
   it('creates unique preset names', () => {

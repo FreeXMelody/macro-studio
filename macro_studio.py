@@ -9,7 +9,7 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 import urllib.parse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 from actions import ACTION_HELP_TEXT, ACTION_KINDS, TARGET_ACTION_KINDS, VALUE_ACTION_KINDS
@@ -303,14 +303,34 @@ class MacroStudio(tk.Tk):
                 except (TypeError, ValueError):
                     offset_x = 0
                     offset_y = 0
+                try:
+                    retry_attempts = max(1, int(item.get("retry_attempts", 5)))
+                except (TypeError, ValueError):
+                    retry_attempts = 5
+                try:
+                    retry_interval = max(0.0, float(item.get("retry_interval", 0.25)))
+                except (TypeError, ValueError):
+                    retry_interval = 0.25
+                try:
+                    edge_low = int(item.get("edge_low", 60))
+                    edge_high = int(item.get("edge_high", 160))
+                except (TypeError, ValueError):
+                    edge_low = 60
+                    edge_high = 160
                 targets.append(ImageTarget(
                     name=name,
                     template_path=template_path,
+                    match_mode=str(item.get("match_mode", "grayscale")).strip() or "grayscale",
+                    mask_path=str(item.get("mask_path", "")).strip(),
+                    edge_low=edge_low,
+                    edge_high=edge_high,
                     region=str(item.get("region", "")).strip(),
                     threshold=threshold,
                     offset_x=offset_x,
                     offset_y=offset_y,
                     retry_seconds=retry_seconds,
+                    retry_attempts=retry_attempts,
+                    retry_interval=retry_interval,
                 ))
         return targets
 
@@ -1126,9 +1146,18 @@ class MacroStudio(tk.Tk):
         if idx is None or idx < 0 or idx >= len(self.image_targets):
             messagebox.showwarning("先选目标", "请先选择要更新的图像目标。", parent=getattr(self, "image_target_window", self))
             return
-        old_name = self.image_targets[idx].name
+        source = self.image_targets[idx]
+        old_name = source.name
         try:
-            target = self.build_image_target_from_form()
+            target = replace(
+                self.build_image_target_from_form(),
+                match_mode=source.match_mode,
+                mask_path=source.mask_path,
+                edge_low=source.edge_low,
+                edge_high=source.edge_high,
+                retry_attempts=source.retry_attempts,
+                retry_interval=source.retry_interval,
+            )
         except ValueError as exc:
             messagebox.showwarning("图像目标", str(exc), parent=getattr(self, "image_target_window", self))
             return
@@ -1153,11 +1182,17 @@ class MacroStudio(tk.Tk):
         target = ImageTarget(
             name=self.unique_image_target_name(f"{source.name} 副本"),
             template_path=source.template_path,
+            match_mode=source.match_mode,
+            mask_path=source.mask_path,
+            edge_low=source.edge_low,
+            edge_high=source.edge_high,
             region=source.region,
             threshold=source.threshold,
             offset_x=source.offset_x,
             offset_y=source.offset_y,
             retry_seconds=source.retry_seconds,
+            retry_attempts=source.retry_attempts,
+            retry_interval=source.retry_interval,
         )
         self.image_targets.append(target)
         self.persist()
@@ -1184,10 +1219,14 @@ class MacroStudio(tk.Tk):
         for step in self.steps:
             if step.kind == "image_click" and step.value == old_name:
                 step.value = new_name
+            if step.verify_target == old_name:
+                step.verify_target = new_name
         for preset in self.step_presets:
             for step in preset["steps"]:
                 if step.kind == "image_click" and step.value == old_name:
                     step.value = new_name
+                if step.verify_target == old_name:
+                    step.verify_target = new_name
 
     def use_image_target_in_step(self):
         idx = self.image_target_index()
@@ -1889,7 +1928,13 @@ class MacroStudio(tk.Tk):
         if idx is None:
             messagebox.showwarning("先选动作", "请先选择要更新的动作。")
             return
-        step = self.build_step_from_form()
+        source = self.steps[idx]
+        step = replace(
+            self.build_step_from_form(),
+            failure_policy=source.failure_policy,
+            failure_retries=source.failure_retries,
+            verify_target=source.verify_target,
+        )
         self.steps[idx] = step
         self.persist()
         self.refresh_steps()
@@ -1909,7 +1954,7 @@ class MacroStudio(tk.Tk):
             messagebox.showwarning("先选动作", "请先选择要复制的动作。")
             return
         source = self.steps[idx]
-        clone = Step(name=f"{source.name} 副本", kind=source.kind, target=source.target, value=source.value, enabled=source.enabled, wait_after=source.wait_after)
+        clone = replace(source, name=f"{source.name} 副本")
         insert_at = idx + 1
         self.steps.insert(insert_at, clone)
         self.persist()

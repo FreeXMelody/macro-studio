@@ -53,6 +53,9 @@ export function emptyStep(kind = 'click'): StepDto {
     value: '',
     enabled: true,
     wait_after: '',
+    failure_policy: kind === 'image_click' ? 'previous_image' : 'stop',
+    failure_retries: 2,
+    verify_target: '',
   }
 }
 

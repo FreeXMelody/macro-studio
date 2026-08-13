@@ -210,6 +210,8 @@ class TargetService:
                 "offset_x": cls._integer(item.get("offset_x", 0)),
                 "offset_y": cls._integer(item.get("offset_y", 0)),
                 "retry_seconds": cls._number(item.get("retry_seconds", 3.0), 3.0),
+                "retry_attempts": cls._integer(item.get("retry_attempts", 5), 5),
+                "retry_interval": cls._number(item.get("retry_interval", 0.25), 0.25),
             })
         return {"active_point_group": active, "point_groups": groups, "image_targets": targets}
 
@@ -252,8 +254,12 @@ class TargetService:
                 raise ValueError("边缘高阈值必须大于低阈值")
             if not 0 <= target["threshold"] <= 1:
                 raise ValueError("识别阈值必须在 0 到 1 之间")
-            if target["retry_seconds"] < 0:
-                raise ValueError("重试秒数不能小于 0")
+            if not 0 <= target["retry_seconds"] <= 120:
+                raise ValueError("最大重试时长必须在 0 到 120 秒之间")
+            if not 1 <= target["retry_attempts"] <= 100:
+                raise ValueError("最多尝试次数必须在 1 到 100 次之间")
+            if not 0 <= target["retry_interval"] <= 30:
+                raise ValueError("重试间隔必须在 0 到 30 秒之间")
             TargetService._validate_region(target["region"])
 
     @staticmethod
@@ -271,11 +277,11 @@ class TargetService:
             raise ValueError("识别区域宽度和高度必须大于 0")
 
     @staticmethod
-    def _integer(value):
+    def _integer(value, fallback=0):
         try:
             return int(value)
         except (TypeError, ValueError):
-            return 0
+            return fallback
 
     @staticmethod
     def _number(value, fallback):

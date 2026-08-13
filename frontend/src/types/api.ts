@@ -30,6 +30,9 @@ export interface StepDto {
   value: string
   enabled: boolean
   wait_after: string
+  failure_policy: '' | 'stop' | 'skip' | 'retry_step' | 'previous_image'
+  failure_retries: number
+  verify_target: string
 }
 
 export interface SongDto {
@@ -110,6 +113,8 @@ export interface ImageTargetDto {
   offset_x: number
   offset_y: number
   retry_seconds: number
+  retry_attempts: number
+  retry_interval: number
 }
 
 export interface TargetLibraryDto {

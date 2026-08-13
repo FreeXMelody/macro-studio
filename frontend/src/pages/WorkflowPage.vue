@@ -67,6 +67,22 @@ const dirty = computed(
 )
 const canSave = computed(() => runtime.isConnected && dirty.value && !runtime.presetSaving)
 const typeOptions = ACTION_TYPE_OPTIONS.map(({ value, label }) => ({ value, label }))
+const failurePolicyOptions = [
+  { value: 'stop', label: '停止整个序列' },
+  { value: 'skip', label: '跳过当前动作' },
+  { value: 'retry_step', label: '重试当前动作' },
+  { value: 'previous_image', label: '回退到上一个图像动作' },
+]
+const failurePolicyLabels: Record<string, string> = {
+  '': '兼容模式',
+  stop: '失败即停止',
+  skip: '失败时跳过',
+  retry_step: '失败时重试',
+  previous_image: '失败时回退图像',
+}
+const usesFailureRetries = computed(() =>
+  ['retry_step', 'previous_image'].includes(stepForm.value.failure_policy),
+)
 const activePointGroup = computed(() => {
   const library = runtime.targets
   if (!library) return null
@@ -94,6 +110,13 @@ const imageTargetOptions = computed(() => {
   }
   return options
 })
+const verificationTargetOptions = computed(() => [
+  { value: '', label: '不验证点击结果' },
+  ...(runtime.targets?.image_targets ?? []).map((target) => ({
+    value: target.name,
+    label: `${target.name} · ${target.match_mode}`,
+  })),
+])
 const currentType = computed(() => actionType(stepForm.value.kind))
 const valueLabel = computed(() => {
   if (stepForm.value.kind === 'image_click') return '图像目标'
@@ -197,7 +220,13 @@ function deletePreset() {
 
 function openStep(index: number | null) {
   editingStepIndex.value = index
-  stepForm.value = index === null ? emptyStep() : { ...steps.value[index] }
+  const source = index === null ? emptyStep() : { ...steps.value[index] }
+  stepForm.value = {
+    ...source,
+    failure_policy: source.failure_policy || (source.kind === 'image_click' ? 'previous_image' : 'stop'),
+    failure_retries: Number.isFinite(Number(source.failure_retries)) ? Number(source.failure_retries) : 2,
+    verify_target: source.verify_target || '',
+  }
   stepDialogOpen.value = true
 }
 
@@ -208,6 +237,10 @@ function setStepKind(kind: string) {
   stepForm.value.kind = kind
   if (!next.needsTarget) stepForm.value.target = ''
   if (!next.needsValue) stepForm.value.value = ''
+  if (kind === 'image_click' && previous.value !== 'image_click' && stepForm.value.failure_policy === 'stop') {
+    stepForm.value.failure_policy = 'previous_image'
+  }
+  if (kind !== 'image_click') stepForm.value.verify_target = ''
 }
 
 function submitStep() {
@@ -226,6 +259,9 @@ function submitStep() {
     value: spec.needsValue ? stepForm.value.value.trim() : '',
     enabled: stepForm.value.enabled,
     wait_after: stepForm.value.kind === 'wait' ? '' : waitAfter,
+    failure_policy: stepForm.value.failure_policy || 'stop',
+    failure_retries: Math.max(0, Math.min(20, Math.round(Number(stepForm.value.failure_retries) || 0))),
+    verify_target: stepForm.value.kind === 'image_click' ? stepForm.value.verify_target.trim() : '',
   }
   if (spec.needsTarget && !step.target) {
     localError.value = '请填写动作点位'
@@ -286,9 +322,18 @@ function setStepEnabled(index: number, event: Event) {
 }
 
 function parameterSummary(step: StepDto) {
-  if (actionType(step.kind).needsTarget) return step.target || '未设置'
-  if (actionType(step.kind).needsValue) return step.value || '未设置'
-  return '无需参数'
+  let parameter = '无需参数'
+  if (actionType(step.kind).needsTarget) parameter = step.target || '未设置'
+  else if (actionType(step.kind).needsValue) parameter = step.value || '未设置'
+  const details = [parameter]
+  if (step.kind === 'image_click' && step.verify_target) details.push(`验证 ${step.verify_target}`)
+  if (step.failure_policy && step.failure_policy !== 'stop') {
+    const retries = ['retry_step', 'previous_image'].includes(step.failure_policy)
+      ? ` × ${step.failure_retries}`
+      : ''
+    details.push(`${failurePolicyLabels[step.failure_policy] || step.failure_policy}${retries}`)
+  }
+  return details.join(' · ')
 }
 
 function beginPointerDrag(index: number, event: PointerEvent) {
@@ -586,6 +631,18 @@ async function save() {
             <label v-if="stepForm.kind !== 'wait'">
               <span>动作后等待（秒）</span>
               <input v-model="stepForm.wait_after" inputmode="decimal" placeholder="例如 0.5 或 00:02" />
+            </label>
+            <div v-if="stepForm.kind === 'image_click'" class="form-field">
+              <span>点击后验证</span>
+              <AppSelect v-model="stepForm.verify_target" :options="verificationTargetOptions" label="点击后验证目标" searchable search-placeholder="搜索图像目标" />
+            </div>
+            <div class="form-field">
+              <span>失败处理</span>
+              <AppSelect v-model="stepForm.failure_policy" :options="failurePolicyOptions" label="失败处理" />
+            </div>
+            <label v-if="usesFailureRetries">
+              <span>最多恢复次数</span>
+              <input v-model.number="stepForm.failure_retries" min="0" max="20" step="1" type="number" />
             </label>
             <div class="queue-option workflow-enabled-option">
               <div><strong>启用动作</strong></div>

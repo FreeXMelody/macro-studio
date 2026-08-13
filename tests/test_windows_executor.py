@@ -250,7 +250,9 @@ class WindowsActionExecutorTests(unittest.TestCase):
                         "name": "剧组站",
                         "template_path": "stage.png",
                         "threshold": 0.7,
-                        "retry_seconds": 1,
+                        "retry_seconds": 10,
+                        "retry_attempts": 2,
+                        "retry_interval": 0,
                     }
                 ],
             }
@@ -274,7 +276,7 @@ class WindowsActionExecutorTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
-                r"实际尝试 2 次.*本轮最高相似度 0.660 / 阈值 0.700",
+                r"实际尝试 2/2 次.*达到最多尝试次数.*本轮最高相似度 0.660 / 阈值 0.700",
             ):
                 executor.execute_step(
                     Step("识别", "image_click", value="剧组站"),
@@ -282,9 +284,35 @@ class WindowsActionExecutorTests(unittest.TestCase):
                     prepared,
                 )
 
-        self.assertTrue(any("图像识别尝试 1 未命中" in log and "0.610" in log for log in self.logs))
-        self.assertTrue(any("图像识别尝试 2 未命中" in log and "0.660" in log for log in self.logs))
+        self.assertTrue(any("点击目标识别尝试 1/2 未命中" in log and "0.610" in log for log in self.logs))
+        self.assertTrue(any("点击目标识别尝试 2/2 未命中" in log and "0.660" in log for log in self.logs))
 
+    def test_image_click_verifies_next_target_without_clicking_it(self):
+        executor = self.make_executor(
+            {
+                "window_hint": "逆水寒",
+                "focus_window": False,
+                "input_mode": "window_message",
+                "image_targets": [
+                    {"name": "入口", "template_path": "entry.png", "retry_seconds": 0},
+                    {"name": "下一界面", "template_path": "ready.png", "retry_seconds": 0},
+                ],
+            }
+        )
+        job = make_job()
+        prepared = executor.prepare_job(job, make_prepared([]))
+
+        executor.execute_step(
+            Step("打开入口", "image_click", value="入口", verify_target="下一界面"),
+            job,
+            prepared,
+        )
+
+        locate_calls = [call for call in self.bindings.calls if call[0] == "locate_window"]
+        click_calls = [call for call in self.bindings.calls if call[0] == "post_click_window_xy"]
+        self.assertEqual([Path(call[1]).name for call in locate_calls], ["entry.png", "ready.png"])
+        self.assertEqual(click_calls, [("post_click_window_xy", 42, 100, 200)])
+        self.assertTrue(any("点击后验证通过：下一界面" in log for log in self.logs))
     def test_point_click_preview_uses_physical_screen_coordinates(self):
         visualized = []
         executor = self.make_executor(

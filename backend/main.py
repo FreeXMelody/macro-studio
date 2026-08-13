@@ -151,6 +151,8 @@ def _replace_target_reference(step, point_renames, image_target_renames):
         step["target"] = point_renames[step["target"]]
     if step.get("kind") == "image_click" and step.get("value") in image_target_renames:
         step["value"] = image_target_renames[step["value"]]
+    if step.get("verify_target") in image_target_renames:
+        step["verify_target"] = image_target_renames[step["verify_target"]]
 
 
 app = build_application()

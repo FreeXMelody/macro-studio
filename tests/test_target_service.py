@@ -96,6 +96,8 @@ class TargetServiceTests(unittest.TestCase):
 
         self.assertEqual(target["match_mode"], "grayscale")
         self.assertEqual((target["edge_low"], target["edge_high"]), (60, 160))
+        self.assertEqual(target["retry_attempts"], 5)
+        self.assertEqual(target["retry_interval"], 0.25)
 
     def test_template_preview_only_resolves_configured_target(self):
         with tempfile.TemporaryDirectory() as directory:

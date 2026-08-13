@@ -17,6 +17,9 @@ class StepDto(ApiModel):
     value: str = ""
     enabled: bool = True
     wait_after: str = ""
+    failure_policy: Literal["", "stop", "skip", "retry_step", "previous_image"] = ""
+    failure_retries: int = Field(default=2, ge=0, le=20)
+    verify_target: str = ""
 
 
 class SongDto(ApiModel):
@@ -66,7 +69,9 @@ class ImageTargetDto(ApiModel):
     threshold: float = Field(default=0.85, ge=0, le=1)
     offset_x: int = 0
     offset_y: int = 0
-    retry_seconds: float = Field(default=3.0, ge=0)
+    retry_seconds: float = Field(default=3.0, ge=0, le=120)
+    retry_attempts: int = Field(default=5, ge=1, le=100)
+    retry_interval: float = Field(default=0.25, ge=0, le=30)
 
 
 class TargetLibraryDto(ApiModel):
