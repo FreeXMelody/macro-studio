@@ -75,7 +75,7 @@ class LocalApiTests(unittest.TestCase):
     def headers(self):
         return {SESSION_HEADER: self.TOKEN}
 
-    def test_simulation_applies_fractional_wait_after(self):
+    def test_simulation_validates_wait_but_uses_accelerated_tick(self):
         _app, catalog, runner = self.make_stack(step_seconds=0.1)
         job = catalog.jobs()[0]
         prepared = catalog.prepare_job(job)
@@ -89,7 +89,23 @@ class LocalApiTests(unittest.TestCase):
         )
 
         self.assertEqual(len(waits), 1)
-        self.assertAlmostEqual(waits[0], 0.6)
+        self.assertAlmostEqual(waits[0], 0.1)
+
+    def test_run_plan_reports_queue_summary(self):
+        app, _catalog, _runner = self.make_stack()
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/runner/plan",
+                headers=self.headers,
+                json={"active_group": "古风"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        report = response.json()
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["item_count"], 1)
+        self.assertEqual(report["action_count"], 2)
+        self.assertEqual(report["estimated_seconds"], 1)
 
     def test_health_and_catalog_require_session_token(self):
         app, _catalog, _runner = self.make_stack()

@@ -88,6 +88,33 @@ export interface RunnerStartRequest {
   random: boolean
   simulation: boolean
 }
+export interface RunPlanIssue {
+  severity: 'error' | 'warning'
+  code: string
+  message: string
+  item_index: number | null
+  item_name: string
+  step_index: number | null
+  step_name: string
+}
+
+export interface RunPlanItem {
+  name: string
+  group: string
+  workflow: string
+  actions: number
+  estimated_seconds: number
+}
+
+export interface RunPlanResponse {
+  ready: boolean
+  items: RunPlanItem[]
+  item_count: number
+  action_count: number
+  estimated_seconds: number
+  issues: RunPlanIssue[]
+}
+
 export interface PointDto {
   name: string
   x: number

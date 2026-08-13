@@ -7,6 +7,7 @@ import type {
   PresetDto,
   RunnerCommandResponse,
   RunnerEvent,
+  RunPlanResponse,
   RunnerStartRequest,
   RunnerStateResponse,
   RegionSelectionResponse,
@@ -175,6 +176,13 @@ export class MacroStudioClient {
   }
   runner(): Promise<RunnerStateResponse> {
     return this.request('/api/runner')
+  }
+
+  runPlan(activeGroup: string | null): Promise<RunPlanResponse> {
+    return this.request('/api/runner/plan', {
+      method: 'POST',
+      body: JSON.stringify({ active_group: activeGroup }),
+    })
   }
 
   start(payload: RunnerStartRequest): Promise<RunnerCommandResponse> {

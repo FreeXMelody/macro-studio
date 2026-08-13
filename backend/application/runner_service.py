@@ -185,6 +185,7 @@ class RunnerService:
             prepare_job=prepare_job,
             execute_step=execute_step,
             emit=self.event_bus.publish,
+            transition_seconds=self.simulation_step_seconds if simulation else 1.0,
         )
         try:
             runner.run(jobs, loop_enabled=loop_enabled, random_enabled=random_enabled)
@@ -206,15 +207,17 @@ class RunnerService:
         return self.executor.prepare_job(job, prepared)
 
     def _execute_simulated_step(self, step, job, _prepared):
-        seconds = self.simulation_step_seconds
+        planned_seconds = 0.0
         if step.kind == "wait":
-            seconds += parse_duration(render_template(step.value, job.song))
+            planned_seconds = parse_duration(render_template(step.value, job.song))
         else:
             wait_after = render_template(step.wait_after, job.song).strip()
             if wait_after:
-                seconds += parse_duration(wait_after)
-        if seconds:
-            self.control.wait(seconds)
+                planned_seconds = parse_duration(wait_after)
+        if planned_seconds < 0:
+            raise ValueError("等待时长不能小于 0")
+        if self.simulation_step_seconds:
+            self.control.wait(self.simulation_step_seconds)
 
     def _publish_state(self, reason):
         self.event_bus.publish(

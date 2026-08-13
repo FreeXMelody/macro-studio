@@ -4,6 +4,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 import { MacroStudioClient, parseRunnerEvent } from '../api/client'
+import { playlistRunItem } from '../domain/run-item'
 import type {
   ConnectionPhase,
   HealthResponse,
@@ -13,6 +14,7 @@ import type {
   PointPreviewResponse,
   PresetDto,
   RunnerEvent,
+  RunPlanResponse,
   RunnerMode,
   RegionSelectionResponse,
   RunnerStateResponse,
@@ -39,6 +41,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const settings = ref<TargetSettingsDto | null>(null)
   const settingsSaving = ref(false)
   const runner = ref<RunnerStateResponse>({ status: 'idle', active: false, mode: 'simulation' })
+  const runPlan = ref<RunPlanResponse | null>(null)
+  const planChecking = ref(false)
   const events = ref<RunnerEvent[]>([])
   const error = ref('')
   const selectedGroup = ref('全部')
@@ -77,7 +81,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (activeGroup.value) return activeGroup.value.songs
     return playlists.value.song_groups.flatMap((group) => group.songs)
   })
-  const enabledSongCount = computed(() => visibleSongs.value.filter((song) => song.enabled).length)
+  const visibleRunItems = computed(() => {
+    if (!playlists.value) return []
+    const groups = activeGroup.value ? [activeGroup.value] : playlists.value.song_groups
+    return groups.flatMap((group) =>
+      group.songs.map((song, index) => playlistRunItem(song, group.name, index)),
+    )
+  })
+  const enabledSongCount = computed(() => visibleRunItems.value.filter((item) => item.enabled).length)
 
   async function initialize() {
     if (isTauri()) {
@@ -153,6 +164,18 @@ export const useRuntimeStore = defineStore('runtime', () => {
     connection.value = null
     client.value = null
     health.value = null
+  }
+
+  async function inspectRunPlan() {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    planChecking.value = true
+    try {
+      const report = await client.value.runPlan(selectedGroup.value)
+      runPlan.value = report
+      return report
+    } finally {
+      planChecking.value = false
+    }
   }
 
   async function start(options: { once?: boolean } = {}) {
@@ -479,6 +502,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     targets,
     settings,
     runner,
+    runPlan,
+    planChecking,
     events,
     error,
     selectedGroup,
@@ -500,10 +525,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
     canResume,
     canStop,
     visibleSongs,
+    visibleRunItems,
     enabledSongCount,
     initialize,
     connect,
     disconnect,
+    inspectRunPlan,
     start,
     testStep,
     pause,

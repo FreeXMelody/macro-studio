@@ -42,6 +42,33 @@ describe('MacroStudioClient', () => {
     )
   })
 
+  it('requests a run plan for the selected queue group', async () => {
+    const report = {
+      ready: true,
+      items: [],
+      item_count: 0,
+      action_count: 0,
+      estimated_seconds: 0,
+      issues: [],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(report), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(new MacroStudioClient(connection).runPlan('KPOP')).resolves.toEqual(report)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:43210/api/runner/plan',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ active_group: 'KPOP' }),
+      }),
+    )
+  })
+
   it('saves action presets through the typed endpoint', async () => {
     const presets = [
       {

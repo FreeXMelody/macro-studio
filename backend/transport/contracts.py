@@ -170,6 +170,37 @@ class RunnerStartRequest(ApiModel):
     simulation: bool = True
 
 
+class RunPlanRequest(ApiModel):
+    active_group: str | None = None
+
+
+class RunPlanIssueDto(ApiModel):
+    severity: Literal["error", "warning"]
+    code: str
+    message: str
+    item_index: int | None = None
+    item_name: str = ""
+    step_index: int | None = None
+    step_name: str = ""
+
+
+class RunPlanItemDto(ApiModel):
+    name: str
+    group: str
+    workflow: str
+    actions: int = Field(ge=0)
+    estimated_seconds: float = Field(ge=0)
+
+
+class RunPlanResponse(ApiModel):
+    ready: bool
+    items: list[RunPlanItemDto]
+    item_count: int = Field(ge=0)
+    action_count: int = Field(ge=0)
+    estimated_seconds: float = Field(ge=0)
+    issues: list[RunPlanIssueDto]
+
+
 class StepTestRequest(ApiModel):
     step: StepDto
     song: SongDto | None = None

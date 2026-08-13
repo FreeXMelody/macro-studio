@@ -9,6 +9,7 @@ import uvicorn
 from backend.application.catalog_service import CatalogService
 from backend.application.event_bus import EventBus
 from backend.application.runner_service import RunnerService
+from backend.application.run_plan_service import RunPlanService
 from backend.application.target_service import TargetService
 from backend.application.settings_service import SettingsService
 from backend.domain.runner import RunnerControl, RunnerEvent
@@ -87,6 +88,11 @@ def build_application(session_token=None, config_path=CONFIG_PATH, playlist_path
         save_targets=save_targets,
         replace_references=catalog.replace_target_references,
     )
+    run_plan = RunPlanService(
+        catalog,
+        target_provider=targets.document,
+        template_validator=targets.template_path,
+    )
     event_bus = EventBus()
     control = RunnerControl()
 
@@ -141,6 +147,7 @@ def build_application(session_token=None, config_path=CONFIG_PATH, playlist_path
         emergency_stop=hotkey_monitor,
         settings=settings,
         window_inspector=window_inspector,
+        run_plan=run_plan,
     )
 
 

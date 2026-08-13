@@ -1133,6 +1133,77 @@ a:focus-visible {
   font-weight: 650;
 }
 
+.run-plan-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 32px));
+  overflow: hidden;
+}
+
+.run-plan-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  overflow: auto;
+}
+
+.run-plan-issues {
+  display: grid;
+  gap: 7px;
+  max-height: 310px;
+  overflow: auto;
+}
+
+.run-plan-issue {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #5a4540;
+  color: #e9ae81;
+  background: #241c18;
+}
+
+.run-plan-issue.error {
+  border-color: #693f44;
+  color: #f09aa2;
+  background: #271a1d;
+}
+
+.run-plan-issue > div,
+.run-plan-ready > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.run-plan-issue strong,
+.run-plan-ready strong {
+  color: #dce2e6;
+  font-size: 12px;
+}
+
+.run-plan-issue span,
+.run-plan-ready span {
+  color: #89939b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.run-plan-ready {
+  display: grid;
+  min-height: 62px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #365f55;
+  color: #7bd6bc;
+  background: #17241f;
+}
+
 .run-dialog-actions {
   display: flex;
   min-height: 58px;

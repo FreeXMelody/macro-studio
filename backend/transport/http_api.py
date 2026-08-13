@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 
 from backend.application.event_bus import EventBus
 from backend.application.runner_service import RunnerBusyError, RunnerService, RunnerUnavailableError
+from backend.application.run_plan_service import RunPlanService
 from backend.transport.contracts import (
     HealthResponse,
     MaskImportRequest,
@@ -32,6 +33,8 @@ from backend.transport.contracts import (
     VisionTestRequest,
     VisionTestResponse,
     RunnerCommandResponse,
+    RunPlanRequest,
+    RunPlanResponse,
     RunnerStartRequest,
     RunnerStateResponse,
     StepTestRequest,
@@ -63,12 +66,18 @@ def create_app(
     emergency_stop=None,
     settings=None,
     window_inspector=None,
+    run_plan=None,
 ):
     session_token = str(session_token or "")
     if not session_token:
         raise ValueError("session_token 不能为空")
     event_bus = event_bus or EventBus()
     runner = runner or RunnerService(catalog, event_bus)
+    run_plan = run_plan or RunPlanService(
+        catalog,
+        target_provider=targets.document if targets is not None else None,
+        template_validator=targets.template_path if targets is not None else None,
+    )
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -109,6 +118,7 @@ def create_app(
     app.state.point_preview = point_preview
     app.state.region_selector = region_selector
     app.state.vision_tester = vision_tester
+    app.state.run_plan = run_plan
     app.state.session_token = session_token
 
     def require_session(
@@ -272,6 +282,10 @@ def create_app(
             active=runner.is_active,
             mode=runner.mode,
         )
+
+    @app.post("/api/runner/plan", response_model=RunPlanResponse, dependencies=authorized)
+    def inspect_run_plan(command: RunPlanRequest):
+        return require_capability(run_plan, "运行计划分析服务不可用").inspect(command.active_group)
 
     @app.post("/api/runner/start", response_model=RunnerCommandResponse, dependencies=authorized)
     def start_runner(command: RunnerStartRequest):

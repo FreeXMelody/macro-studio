@@ -29,6 +29,7 @@ class SequenceRunner:
         emit: Callable[[RunnerEvent], None] | None = None,
         shuffle: Callable[[list], None] | None = None,
         image_recovery_limit: int = 2,
+        transition_seconds: float = 1.0,
     ):
         self.control = control
         self.prepare_job = prepare_job
@@ -36,6 +37,7 @@ class SequenceRunner:
         self.emit = emit or (lambda _event: None)
         self.shuffle = shuffle or random.shuffle
         self.image_recovery_limit = max(0, int(image_recovery_limit))
+        self.transition_seconds = max(0.0, float(transition_seconds))
 
     def run(self, jobs, loop_enabled=False, random_enabled=False):
         jobs = [job if isinstance(job, RunnerJob) else RunnerJob(**job) for job in jobs]
@@ -102,13 +104,13 @@ class SequenceRunner:
                         total=total_songs,
                         loop=bool(loop_enabled),
                     )
-                    if not self.control.wait(1):
+                    if self.transition_seconds and not self.control.wait(self.transition_seconds):
                         break
 
             if failure is not None or self.control.should_stop() or not loop_enabled:
                 break
             self._emit("cycle.next", cycle=cycle + 1)
-            if not self.control.wait(1):
+            if self.transition_seconds and not self.control.wait(self.transition_seconds):
                 break
 
         if failure is not None:

@@ -169,6 +169,24 @@ class SequenceRunnerTests(unittest.TestCase):
         self.assertEqual(status, RunnerStatus.COMPLETED)
         self.assertFalse(control.should_stop())
         self.assertIn("step.skipped", [event.kind for event in events])
+
+    def test_uses_configured_transition_between_jobs(self):
+        control = RunnerControl()
+        control.reset()
+        waits = []
+        control.wait = lambda seconds: waits.append(seconds) or True
+        runner = SequenceRunner(
+            control=control,
+            prepare_job=prepare_with([]),
+            execute_step=lambda _step, _job, _prepared: None,
+            transition_seconds=0.25,
+        )
+
+        status = runner.run([make_job("One"), make_job("Two")])
+
+        self.assertEqual(status, RunnerStatus.COMPLETED)
+        self.assertEqual(waits, [0.25])
+
     def test_exhausted_recovery_fails_and_requests_stop(self):
         calls = []
 

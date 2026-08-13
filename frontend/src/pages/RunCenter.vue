@@ -5,6 +5,7 @@ import {
   Check,
   CircleAlert,
   Clock3,
+  ClipboardCheck,
   FilePlay,
   ListChecks,
   ListRestart,
@@ -17,6 +18,7 @@ import {
   ShieldAlert,
   Shuffle,
   Square,
+  TriangleAlert,
 } from '@lucide/vue'
 
 import AppSelect from '../components/AppSelect.vue'
@@ -30,11 +32,12 @@ const showRealConfirmation = ref(false)
 const preflightReport = ref<PreflightResponse | null>(null)
 const preflightChecking = ref(false)
 const pendingRunOnce = ref(false)
+const showPlanReport = ref(false)
 
 const groups = computed(() => ['全部', ...(runtime.playlists?.song_groups.map((group) => group.name) || [])])
 const groupOptions = computed(() => groups.value.map((group) => ({ value: group, label: group })))
 const queueDuration = computed(() =>
-  runtime.visibleSongs.reduce((total, song) => total + song.duration_seconds + song.buffer_seconds, 0),
+  runtime.visibleRunItems.reduce((total, item) => total + item.durationSeconds + item.bufferSeconds, 0),
 )
 
 function formatDuration(seconds: number) {
@@ -44,8 +47,25 @@ function formatDuration(seconds: number) {
   return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
 }
 
+async function inspectPlan(openReport = true) {
+  try {
+    const report = await runtime.inspectRunPlan()
+    if (openReport) showPlanReport.value = true
+    return report
+  } catch (error) {
+    runtime.error = error instanceof Error ? error.message : '运行计划检查失败'
+    return null
+  }
+}
+
 async function requestStart(once = false) {
   pendingRunOnce.value = once
+  const report = await inspectPlan(false)
+  if (!report) return
+  if (!report.ready) {
+    showPlanReport.value = true
+    return
+  }
   if (runtime.executionMode === 'real') {
     preflightChecking.value = true
     try {
@@ -97,12 +117,12 @@ async function confirmRealStart() {
           <dd>{{ runtime.enabledSongCount }} 个</dd>
         </div>
         <div>
-          <dt>预计时长</dt>
+          <dt>内容时长</dt>
           <dd>{{ formatDuration(queueDuration) }}</dd>
         </div>
         <div>
           <dt>执行模式</dt>
-          <dd :class="{ 'real-mode-text': runtime.executionMode === 'real' }">{{ runtime.executionMode === 'real' ? '实际' : '演练' }}</dd>
+          <dd :class="{ 'real-mode-text': runtime.executionMode === 'real' }">{{ runtime.executionMode === 'real' ? '实际' : '加速演练' }}</dd>
         </div>
       </dl>
     </section>
@@ -111,7 +131,7 @@ async function confirmRealStart() {
       <header class="section-header">
         <div>
           <h3><ListChecks :size="18" />执行队列</h3>
-          <p>{{ runtime.visibleSongs.length }} 个条目</p>
+          <p>{{ runtime.visibleRunItems.length }} 个条目</p>
         </div>
         <div class="queue-tools">
           <div class="select-field">
@@ -123,6 +143,16 @@ async function confirmRealStart() {
               label="队列分组"
             />
           </div>
+          <button
+            class="icon-button"
+            type="button"
+            title="检查运行计划"
+            :disabled="!runtime.isConnected || runtime.planChecking"
+            @click="inspectPlan(true)"
+          >
+            <LoaderCircle v-if="runtime.planChecking" :size="17" class="spin" />
+            <ClipboardCheck v-else :size="17" />
+          </button>
           <button class="icon-button" type="button" title="刷新运行状态" :disabled="!runtime.isConnected" @click="runtime.refreshRunner">
             <RotateCw :size="17" />
           </button>
@@ -140,25 +170,25 @@ async function confirmRealStart() {
               <th>状态</th>
             </tr>
           </thead>
-          <tbody v-if="runtime.visibleSongs.length">
-            <tr v-for="(song, index) in runtime.visibleSongs" :key="`${song.title}-${index}`" :class="{ disabled: !song.enabled }">
+          <tbody v-if="runtime.visibleRunItems.length">
+            <tr v-for="(item, index) in runtime.visibleRunItems" :key="item.id" :class="{ disabled: !item.enabled }">
               <td class="index-column">{{ index + 1 }}</td>
               <td>
                 <div class="song-cell">
                   <span class="song-icon"><FilePlay :size="16" /></span>
                   <div>
-                    <strong>{{ song.title || '未命名条目' }}</strong>
-                    <span>{{ song.keyword }}</span>
+                    <strong>{{ item.name }}</strong>
+                    <span>{{ item.input }}</span>
                   </div>
                 </div>
               </td>
-              <td>{{ song.step_preset || '继承分组' }}</td>
-              <td><Clock3 :size="14" />{{ formatDuration(song.duration_seconds + song.buffer_seconds) }}</td>
-              <td><span class="song-state" :class="{ enabled: song.enabled }">{{ song.enabled ? '启用' : '停用' }}</span></td>
+              <td>{{ item.workflow }}</td>
+              <td><Clock3 :size="14" />{{ formatDuration(item.durationSeconds + item.bufferSeconds) }}</td>
+              <td><span class="song-state" :class="{ enabled: item.enabled }">{{ item.enabled ? '启用' : '停用' }}</span></td>
             </tr>
           </tbody>
         </table>
-        <div v-if="!runtime.visibleSongs.length" class="empty-state">
+        <div v-if="!runtime.visibleRunItems.length" class="empty-state">
           <FilePlay :size="24" />
           <span>当前分组没有可运行条目</span>
         </div>
@@ -173,9 +203,9 @@ async function confirmRealStart() {
             :class="{ active: runtime.executionMode === 'simulation' }"
             :disabled="runtime.isRunning"
             @click="runtime.executionMode = 'simulation'"
-            title="演练会执行队列调度、变量、等待和日志，但不会向目标窗口发送输入"
+            title="加速检查动作顺序、变量、等待和日志，不向目标窗口发送输入"
           >
-            演练
+            加速演练
           </button>
           <button
             type="button"
@@ -241,6 +271,54 @@ async function confirmRealStart() {
               <div v-for="item in preflightReport.checks" :key="item.key" :class="{ failed: !item.ok }"><Check v-if="item.ok" :size="15" /><CircleAlert v-else :size="15" /><strong>{{ item.label }}</strong><span>{{ item.detail }}</span></div>
             </div>
             <footer class="run-dialog-actions"><button class="button secondary" type="button" @click="preflightReport = null">关闭</button><button class="button primary" type="button" @click="openSettings"><MonitorCog :size="15" />打开目标程序设置</button></footer>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
+    <Teleport to="body">
+      <Transition name="dialog-motion">
+        <div v-if="showPlanReport && runtime.runPlan" class="dialog-backdrop" @mousedown.self="showPlanReport = false">
+          <section class="connection-dialog run-plan-dialog" role="dialog" aria-modal="true" aria-labelledby="run-plan-title">
+            <header class="dialog-header">
+              <div class="dialog-title-wrap">
+                <span class="dialog-icon" :class="{ warning: !runtime.runPlan.ready }">
+                  <ClipboardCheck v-if="runtime.runPlan.ready" :size="18" />
+                  <TriangleAlert v-else :size="18" />
+                </span>
+                <div>
+                  <h2 id="run-plan-title">运行计划报告</h2>
+                  <p>{{ runtime.runPlan.ready ? '工作流可以开始演练' : '发现阻塞演练的问题' }}</p>
+                </div>
+              </div>
+            </header>
+            <div class="run-plan-body">
+              <dl class="run-confirmation-facts">
+                <div><dt>运行条目</dt><dd>{{ runtime.runPlan.item_count }} 个</dd></div>
+                <div><dt>动作总数</dt><dd>{{ runtime.runPlan.action_count }} 个</dd></div>
+                <div><dt>预计实时时长</dt><dd>{{ formatDuration(runtime.runPlan.estimated_seconds) }}</dd></div>
+              </dl>
+              <div v-if="runtime.runPlan.issues.length" class="run-plan-issues">
+                <div
+                  v-for="(issue, index) in runtime.runPlan.issues"
+                  :key="issue.code + ':' + index"
+                  class="run-plan-issue"
+                  :class="issue.severity"
+                >
+                  <TriangleAlert :size="15" />
+                  <div>
+                    <strong>{{ issue.item_name || '执行队列' }}<template v-if="issue.step_name"> · {{ issue.step_name }}</template></strong>
+                    <span>{{ issue.message }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="run-plan-ready">
+                <ClipboardCheck :size="20" />
+                <div><strong>没有发现配置问题</strong><span>演练将使用加速时间轴，不会向目标窗口发送输入。</span></div>
+              </div>
+            </div>
+            <footer class="run-dialog-actions">
+              <button class="button primary" type="button" @click="showPlanReport = false">完成</button>
+            </footer>
           </section>
         </div>
       </Transition>
