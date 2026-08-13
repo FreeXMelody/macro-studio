@@ -639,21 +639,56 @@ a:focus-visible {
 }
 
 .event-panel {
-  height: 156px;
+  --event-panel-height: 180px;
+  position: relative;
   min-height: 38px;
-  max-height: 156px;
-  overflow: hidden;
+  overflow: visible;
   border-top: 1px solid #2d3237;
   background: #121517;
-  transition: height var(--motion-slow) var(--ease-emphasized);
+  transition: flex-basis var(--motion-slow) var(--ease-emphasized);
+}
+
+.global-event-panel {
+  width: 100%;
+  flex: 0 0 var(--event-panel-height);
 }
 
 .event-panel.collapsed {
-  height: 38px;
+  flex-basis: 38px;
 }
-.global-event-panel {
-  flex: 0 0 auto;
-  width: 100%;
+
+.event-panel.resizing {
+  transition: none;
+}
+
+.event-resize-handle {
+  position: absolute;
+  z-index: 4;
+  top: -5px;
+  left: 50%;
+  display: grid;
+  width: 52px;
+  height: 10px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  color: #67717a;
+  background: #1c2124;
+  cursor: ns-resize;
+  transform: translateX(-50%);
+}
+
+.event-resize-handle:hover,
+.event-panel.resizing .event-resize-handle {
+  color: #9fe4d0;
+  background: #263b35;
+}
+
+.log-panel-is-resizing,
+.log-panel-is-resizing * {
+  cursor: ns-resize !important;
+  user-select: none !important;
 }
 
 .event-header {
@@ -691,7 +726,7 @@ a:focus-visible {
 }
 
 .event-list {
-  height: 118px;
+  height: calc(var(--event-panel-height) - 39px);
   overflow: auto;
   padding: 3px 0;
   font-family: "Cascadia Mono", Consolas, monospace;
@@ -1030,6 +1065,86 @@ a:focus-visible {
 .confirmation-actions {
   margin: 0;
 }
+
+.run-confirmation-body {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  color: #bdc4ca;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.run-confirmation-body p {
+  margin: 0;
+  color: #9ca5ad;
+}
+
+.run-confirmation-body kbd {
+  display: inline-grid;
+  min-width: 28px;
+  height: 23px;
+  place-items: center;
+  margin: 0 3px;
+  border: 1px solid #555e65;
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  color: #f0f3f5;
+  background: #22272b;
+  font: inherit;
+  font-weight: 700;
+}
+
+.run-confirmation-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-top: 1px solid #30363b;
+  border-bottom: 1px solid #30363b;
+}
+
+.run-confirmation-facts > div {
+  min-width: 0;
+  padding: 11px 12px;
+  border-left: 1px solid #30363b;
+}
+
+.run-confirmation-facts > div:first-child {
+  border-left: 0;
+}
+
+.run-confirmation-facts dt,
+.run-confirmation-facts dd {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-confirmation-facts dt {
+  margin-bottom: 3px;
+  color: #707a83;
+  font-size: 9px;
+}
+
+.run-confirmation-facts dd {
+  color: #e0e5e8;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.run-dialog-actions {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 11px 18px;
+  border-top: 1px solid #2c3237;
+  border-radius: 0 0 6px 6px;
+  background: #121517;
+}
 .connection-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 150px;
@@ -1096,7 +1211,7 @@ a:focus-visible {
 
 .panel-collapse-enter-active,
 .panel-collapse-leave-active {
-  max-height: 118px;
+  max-height: calc(var(--event-panel-height) - 39px);
   overflow: hidden;
   transition:
     max-height var(--motion-slow) var(--ease-emphasized),
@@ -1256,13 +1371,7 @@ a:focus-visible {
     margin: 8px 0;
   }
 
-  .event-panel {
-    max-height: 110px;
-  }
 
-  .event-list {
-    height: 72px;
-  }
 }
 
 @media (max-width: 1050px) {

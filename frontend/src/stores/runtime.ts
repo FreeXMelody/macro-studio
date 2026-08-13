@@ -155,12 +155,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
     health.value = null
   }
 
-  async function start() {
+  async function start(options: { once?: boolean } = {}) {
     if (!client.value || !canStart.value) return
     await runCommand(async () => {
       const response = await client.value!.start({
         active_group: selectedGroup.value,
-        loop: loop.value,
+        loop: options.once ? false : loop.value,
         random: random.value,
         simulation: executionMode.value === 'simulation',
       })

@@ -25,9 +25,9 @@ onBeforeUnmount(() => runtime.dispose())
           <Activity :size="20" />
           <span>运行</span>
         </RouterLink>
-        <RouterLink class="nav-button" exact-active-class="active" to="/playlists" title="歌单管理">
+        <RouterLink class="nav-button" exact-active-class="active" to="/playlists" title="队列管理">
           <ListMusic :size="20" />
-          <span>歌单</span>
+          <span>队列</span>
         </RouterLink>
         <RouterLink class="nav-button" exact-active-class="active" to="/workflows" title="工作流">
           <Workflow :size="20" />

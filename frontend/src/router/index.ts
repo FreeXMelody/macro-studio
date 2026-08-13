@@ -9,7 +9,7 @@ export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/', name: 'run', component: RunCenter, meta: { title: '运行中心' } },
-    { path: '/playlists', name: 'playlists', component: PlaylistPage, meta: { title: '歌单管理' } },
+    { path: '/playlists', name: 'playlists', component: PlaylistPage, meta: { title: '队列管理' } },
     { path: '/workflows', name: 'workflows', component: WorkflowPage, meta: { title: '工作流' } },
     { path: '/targets', name: 'targets', component: TargetLibraryPage, meta: { title: '目标库' } },
     { path: '/settings', name: 'settings', component: SettingsPage, meta: { title: '目标程序' } },

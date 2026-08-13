@@ -1,12 +1,58 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { ChevronDown, CircleAlert, Terminal, Trash2 } from '@lucide/vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { ChevronDown, CircleAlert, GripHorizontal, Terminal, Trash2 } from '@lucide/vue'
 
 import { useRuntimeStore } from '../stores/runtime'
 import type { RunnerEvent } from '../types/api'
 
 const runtime = useRuntimeStore()
 const latestEvents = computed(() => [...runtime.events].reverse())
+const storedHeight = Number(window.localStorage.getItem('macro-studio.log-height'))
+const requestedHeight = Number.isFinite(storedHeight) && storedHeight >= 118 ? storedHeight : 180
+const panelHeight = ref(clampPanelHeight(requestedHeight))
+const resizing = ref(false)
+const panelStyle = computed(() => ({ '--event-panel-height': panelHeight.value + 'px' }))
+let resizeStartY = 0
+let resizeStartHeight = 0
+
+function clampPanelHeight(value: number) {
+  return Math.round(Math.min(Math.max(118, value), Math.max(180, window.innerHeight * 0.55)))
+}
+
+function fitPanelToViewport() {
+  panelHeight.value = clampPanelHeight(panelHeight.value)
+}
+
+function beginResize(event: PointerEvent) {
+  if (!runtime.logExpanded) return
+  event.preventDefault()
+  resizeStartY = event.clientY
+  resizeStartHeight = panelHeight.value
+  resizing.value = true
+  document.body.classList.add('log-panel-is-resizing')
+  window.addEventListener('pointermove', resizePanel)
+  window.addEventListener('pointerup', finishResize, { once: true })
+}
+
+function resizePanel(event: PointerEvent) {
+  panelHeight.value = clampPanelHeight(resizeStartHeight + resizeStartY - event.clientY)
+}
+
+function finishResize() {
+  resizing.value = false
+  document.body.classList.remove('log-panel-is-resizing')
+  window.removeEventListener('pointermove', resizePanel)
+  window.localStorage.setItem('macro-studio.log-height', String(panelHeight.value))
+}
+
+window.addEventListener('resize', fitPanelToViewport)
+
+onBeforeUnmount(() => {
+  document.body.classList.remove('log-panel-is-resizing')
+  window.removeEventListener('pointermove', resizePanel)
+  window.removeEventListener('pointerup', finishResize)
+  window.removeEventListener('resize', fitPanelToViewport)
+})
 
 function eventTime(event: RunnerEvent) {
   return new Date(event.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false })
@@ -71,7 +117,21 @@ function isError(event: RunnerEvent) {
 </script>
 
 <template>
-  <section class="event-panel global-event-panel" :class="{ collapsed: !runtime.logExpanded }">
+  <section
+    class="event-panel global-event-panel"
+    :class="{ collapsed: !runtime.logExpanded, resizing }"
+    :style="panelStyle"
+  >
+    <button
+      v-if="runtime.logExpanded"
+      class="event-resize-handle"
+      type="button"
+      title="拖动调整日志高度"
+      aria-label="调整运行日志高度"
+      @pointerdown="beginResize"
+    >
+      <GripHorizontal :size="18" />
+    </button>
     <header class="event-header">
       <button class="event-toggle" type="button" @click="runtime.toggleLog">
         <Terminal :size="17" />
