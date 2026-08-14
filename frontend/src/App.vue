@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Activity, Cable, ListMusic, ScanSearch, Settings, Wifi, WifiOff, Workflow } from '@lucide/vue'
 import { useRoute } from 'vue-router'
 
+import brandIcon from './assets/macro-studio-icon.png'
 import ConnectionDialog from './components/ConnectionDialog.vue'
 import GlobalLogPanel from './components/GlobalLogPanel.vue'
 import { useRuntimeStore } from './stores/runtime'
@@ -19,7 +20,7 @@ onBeforeUnmount(() => runtime.dispose())
 <template>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand-mark" title="Macro Studio">M</div>
+      <div class="brand-mark" title="Macro Studio"><img :src="brandIcon" alt="" /></div>
       <nav aria-label="主导航">
         <RouterLink class="nav-button" exact-active-class="active" to="/" title="运行中心">
           <Activity :size="20" />
