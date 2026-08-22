@@ -46,11 +46,14 @@ class RunnerControlTests(unittest.TestCase):
         control.reset()
         control.transition(RunnerStatus.RUNNING)
         result = []
-        worker = threading.Thread(target=lambda: result.append(control.wait(2, poll_interval=0.01)))
+        worker = threading.Thread(target=lambda: result.append(control.wait(10, poll_interval=1)))
         worker.start()
         time.sleep(0.03)
+        stopped_at = time.monotonic()
         control.request_stop()
-        worker.join(timeout=1)
+        worker.join(timeout=0.3)
+        self.assertFalse(worker.is_alive())
+        self.assertLess(time.monotonic() - stopped_at, 0.3)
         self.assertEqual(result, [False])
 
 
@@ -150,6 +153,31 @@ class SequenceRunnerTests(unittest.TestCase):
         self.assertEqual(status, RunnerStatus.COMPLETED)
         recoveries = [event for event in events if event.kind == "step.recovering"]
         self.assertEqual([event.data["rollback"] for event in recoveries], [False, False])
+
+    def test_previous_click_rolls_back_to_previous_point_click(self):
+        calls = []
+        failed_once = False
+
+        def execute(step, _job, _prepared):
+            nonlocal failed_once
+            calls.append(step.name)
+            if step.name == "image" and not failed_once:
+                failed_once = True
+                raise RuntimeError("page not ready")
+
+        steps = [
+            Step("point", "click"),
+            Step("middle", "log"),
+            Step("image", "image_click", failure_policy="previous_click"),
+        ]
+        status, events, _control = self.run_steps(steps, execute)
+
+        self.assertEqual(calls, ["point", "middle", "image", "point", "middle", "image"])
+        recovery = next(event for event in events if event.kind == "step.recovering")
+        self.assertEqual(recovery.data["policy"], "previous_click")
+        self.assertEqual(recovery.data["recovery_name"], "point")
+        self.assertTrue(recovery.data["rollback"])
+        self.assertEqual(status, RunnerStatus.COMPLETED)
 
     def test_skip_policy_continues_with_next_step(self):
         calls = []

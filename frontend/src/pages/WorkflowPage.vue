@@ -72,6 +72,7 @@ const failurePolicyOptions = [
   { value: 'skip', label: '跳过当前动作' },
   { value: 'retry_step', label: '重试当前动作' },
   { value: 'previous_image', label: '回退到上一个图像动作' },
+  { value: 'previous_click', label: '回退到上一个点击动作' },
 ]
 const failurePolicyLabels: Record<string, string> = {
   '': '兼容模式',
@@ -79,9 +80,10 @@ const failurePolicyLabels: Record<string, string> = {
   skip: '失败时跳过',
   retry_step: '失败时重试',
   previous_image: '失败时回退图像',
+  previous_click: '失败时回退点击',
 }
 const usesFailureRetries = computed(() =>
-  ['retry_step', 'previous_image'].includes(stepForm.value.failure_policy),
+  ['retry_step', 'previous_image', 'previous_click'].includes(stepForm.value.failure_policy),
 )
 const activePointGroup = computed(() => {
   const library = runtime.targets
@@ -328,7 +330,7 @@ function parameterSummary(step: StepDto) {
   const details = [parameter]
   if (step.kind === 'image_click' && step.verify_target) details.push(`验证 ${step.verify_target}`)
   if (step.failure_policy && step.failure_policy !== 'stop') {
-    const retries = ['retry_step', 'previous_image'].includes(step.failure_policy)
+    const retries = ['retry_step', 'previous_image', 'previous_click'].includes(step.failure_policy)
       ? ` × ${step.failure_retries}`
       : ''
     details.push(`${failurePolicyLabels[step.failure_policy] || step.failure_policy}${retries}`)

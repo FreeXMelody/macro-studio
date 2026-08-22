@@ -64,11 +64,12 @@ class RunnerService:
                 raise RunnerUnavailableError("真实自动化执行器不可用")
             jobs = self.catalog.jobs(active_group, enabled_only=True)
             self._mode = "simulation" if simulation else "real"
+            loop_enabled = bool(loop_enabled) and not simulation
             self.control.reset()
             self._publish_state("start_requested")
             self._worker = threading.Thread(
                 target=self._run,
-                args=(jobs, bool(loop_enabled), bool(random_enabled), bool(simulation)),
+                args=(jobs, loop_enabled, bool(random_enabled), bool(simulation)),
                 name="macro-studio-runner",
                 daemon=True,
             )

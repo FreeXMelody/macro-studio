@@ -95,7 +95,8 @@ class RunnerControl:
                 self.resume_event.wait(poll_interval)
                 last_tick = time.monotonic()
                 continue
-            time.sleep(min(poll_interval, remaining))
+            if self.stop_event.wait(min(poll_interval, remaining)):
+                return False
             now = time.monotonic()
             remaining -= now - last_tick
             last_tick = now

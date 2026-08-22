@@ -158,22 +158,27 @@ class SequenceRunner:
 
                 attempts = recoveries.get(step_index, 0)
                 limit = self._failure_limit(step)
-                if policy in {"retry_step", "previous_image"} and attempts < limit:
+                if policy in {"retry_step", "previous_image", "previous_click"} and attempts < limit:
                     attempt = attempts + 1
                     recoveries[step_index] = attempt
                     recovery_index = step_index
-                    if policy == "previous_image":
-                        previous_image = next(
+                    if policy in {"previous_image", "previous_click"}:
+                        recovery_kinds = (
+                            {"image_click"}
+                            if policy == "previous_image"
+                            else {"click", "image_click"}
+                        )
+                        previous_action = next(
                             (
                                 index
                                 for index in range(step_index - 1, -1, -1)
                                 if getattr(steps[index], "enabled", True)
-                                and steps[index].kind == "image_click"
+                                and steps[index].kind in recovery_kinds
                             ),
                             None,
                         )
-                        if previous_image is not None:
-                            recovery_index = previous_image
+                        if previous_action is not None:
+                            recovery_index = previous_action
                     self._emit(
                         "step.recovering",
                         index=step_index,
@@ -208,7 +213,7 @@ class SequenceRunner:
         policy = str(getattr(step, "failure_policy", "") or "").strip()
         if not policy:
             return "previous_image" if getattr(step, "kind", "") == "image_click" else "stop"
-        if policy not in {"stop", "skip", "retry_step", "previous_image"}:
+        if policy not in {"stop", "skip", "retry_step", "previous_image", "previous_click"}:
             return "stop"
         return policy
 

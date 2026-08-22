@@ -130,7 +130,9 @@ function isError(event: RunnerEvent) {
       aria-label="调整运行日志高度"
       @pointerdown="beginResize"
     >
-      <GripHorizontal :size="18" />
+      <span class="event-resize-pill" aria-hidden="true">
+        <GripHorizontal :size="14" />
+      </span>
     </button>
     <header class="event-header">
       <button class="event-toggle" type="button" @click="runtime.toggleLog">

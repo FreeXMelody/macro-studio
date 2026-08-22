@@ -83,6 +83,7 @@ async function runPreflight() {
 
     <div class="settings-workspace">
       <section class="settings-form-panel">
+        <div class="settings-form-scroll">
         <header><MonitorCog :size="18" /><div><h3>窗口连接</h3><p>窗口关键词会匹配游戏主窗口标题</p></div></header>
         <label class="form-field">窗口关键词<input v-model="draft.window_hint" placeholder="例如 逆水寒手游桌面版" /></label>
         <div class="settings-field-group">
@@ -96,6 +97,7 @@ async function runPreflight() {
         <label class="settings-check"><input v-model="draft.focus_window" type="checkbox" /><span><strong>执行前聚焦窗口</strong><small>后台模式建议关闭；前台模式建议开启</small></span></label>
         <label class="settings-check"><input v-model="draft.confirm_step_test" type="checkbox" /><span><strong>单步实际测试前确认</strong><small>关闭后点击烧瓶按钮将立即执行；仍可按 F9 急停</small></span></label>
         <label class="settings-check"><input v-model="draft.preview_clicks" type="checkbox" /><span><strong>执行时显示点击位置</strong><small>点位与图像点击后短暂显示十字线，不会移动物理鼠标</small></span></label>
+        </div>
         <div class="settings-test-actions">
           <button class="button secondary" type="button" :disabled="Boolean(busy)" @click="inspect(false)"><LoaderCircle v-if="busy === 'probe'" class="spin" :size="15" /><RefreshCw v-else :size="15" />检测连接</button>
           <button class="button secondary" type="button" :disabled="Boolean(busy)" @click="inspect(true)"><LoaderCircle v-if="busy === 'capture'" class="spin" :size="15" /><Focus v-else :size="15" />后台截图测试</button>

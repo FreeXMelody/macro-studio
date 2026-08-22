@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from backend.application.catalog_service import CatalogService
 from backend.application.event_bus import EventBus
 from backend.application.runner_service import RunnerService
+from backend.domain.runner import RunnerStatus
 from backend.transport.http_api import SESSION_HEADER, create_app
 from models import Song, SongGroup, Step
 
@@ -90,6 +91,19 @@ class LocalApiTests(unittest.TestCase):
 
         self.assertEqual(len(waits), 1)
         self.assertAlmostEqual(waits[0], 0.1)
+
+    def test_simulation_ignores_loop_and_completes_one_cycle(self):
+        app, _catalog, runner = self.make_stack(step_seconds=0.001)
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/runner/start",
+                headers=self.headers,
+                json={"active_group": "古风", "loop": True, "simulation": True},
+            )
+            self.assertEqual(response.status_code, 200)
+            runner.join(timeout=1)
+
+        self.assertEqual(runner.status, RunnerStatus.COMPLETED)
 
     def test_run_plan_reports_queue_summary(self):
         app, _catalog, _runner = self.make_stack()
@@ -195,6 +209,34 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(step["failure_retries"], 3)
         self.assertEqual(step["verify_target"], "搜索结果图像")
         self.assertEqual(catalog.presets_document()[0]["steps"][0]["kind"], "image_click")
+
+    def test_previous_click_policy_round_trip_is_preserved(self):
+        app, _catalog, _runner = self.make_stack()
+        payload = [
+            {
+                "name": "点击恢复流程",
+                "steps": [
+                    {
+                        "name": "重新打开入口",
+                        "kind": "click",
+                        "target": "入口",
+                        "value": "",
+                        "enabled": True,
+                        "wait_after": "0.2",
+                        "failure_policy": "previous_click",
+                        "failure_retries": 2,
+                        "verify_target": "",
+                    }
+                ],
+            }
+        ]
+        with TestClient(app) as client:
+            response = client.put("/api/presets", headers=self.headers, json=payload)
+            loaded = client.get("/api/presets", headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(loaded.json()[0]["steps"][0]["failure_policy"], "previous_click")
+
     def test_playlist_update_rejects_invalid_group_names(self):
         app, _catalog, _runner = self.make_stack()
         base_group = {"name": "古风", "step_preset": "", "songs": []}

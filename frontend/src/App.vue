@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, Cable, ListMusic, ScanSearch, Settings, Wifi, WifiOff, Workflow } from '@lucide/vue'
+import { Activity, Cable, Copy, ListMusic, Minus, ScanSearch, Settings, Square, Wifi, WifiOff, Workflow, X } from '@lucide/vue'
+import type { UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRoute } from 'vue-router'
 
 import brandIcon from './assets/macro-studio-icon.png'
@@ -12,9 +14,44 @@ const runtime = useRuntimeStore()
 const route = useRoute()
 const connectionOpen = ref(false)
 const pageTitle = computed(() => String(route.meta.title || 'Macro Studio'))
+const isWindowMaximized = ref(false)
+const desktopWindow = '__TAURI_INTERNALS__' in window ? getCurrentWindow() : null
+let unlistenWindowResize: UnlistenFn | undefined
 
-onMounted(() => runtime.initialize())
-onBeforeUnmount(() => runtime.dispose())
+async function refreshWindowState() {
+  if (desktopWindow) isWindowMaximized.value = await desktopWindow.isMaximized()
+}
+
+async function minimizeWindow() {
+  await desktopWindow?.minimize()
+}
+
+async function toggleMaximizeWindow() {
+  if (!desktopWindow) return
+  await desktopWindow.toggleMaximize()
+  await refreshWindowState()
+}
+
+async function closeWindow() {
+  await desktopWindow?.close()
+}
+
+function handleTitlebarDoubleClick(event: MouseEvent) {
+  if ((event.target as HTMLElement).closest('button, a, input, select')) return
+  void toggleMaximizeWindow()
+}
+
+onMounted(async () => {
+  runtime.initialize()
+  if (!desktopWindow) return
+  await refreshWindowState()
+  unlistenWindowResize = await desktopWindow.onResized(refreshWindowState)
+})
+
+onBeforeUnmount(() => {
+  unlistenWindowResize?.()
+  runtime.dispose()
+})
 </script>
 
 <template>
@@ -46,18 +83,32 @@ onBeforeUnmount(() => runtime.dispose())
     </aside>
 
     <section class="workspace">
-      <header class="topbar">
-        <div>
+      <header class="topbar" data-tauri-drag-region @dblclick="handleTitlebarDoubleClick">
+        <div class="titlebar-identity" data-tauri-drag-region>
           <h1>Macro Studio</h1>
           <span class="topbar-separator" />
           <p>{{ pageTitle }}</p>
         </div>
-        <button class="connection-chip" :class="runtime.phase" type="button" @click="connectionOpen = true">
-          <Wifi v-if="runtime.isConnected" :size="16" />
-          <WifiOff v-else :size="16" />
-          <span>{{ runtime.isConnected ? '本地服务已连接' : runtime.phase === 'connecting' ? '正在连接' : '本地服务未连接' }}</span>
-          <code v-if="runtime.connection">{{ runtime.connection.port }}</code>
-        </button>
+        <div class="topbar-actions">
+          <button class="connection-chip" :class="runtime.phase" type="button" @click="connectionOpen = true">
+            <Wifi v-if="runtime.isConnected" :size="16" />
+            <WifiOff v-else :size="16" />
+            <span>{{ runtime.isConnected ? '本地服务已连接' : runtime.phase === 'connecting' ? '正在连接' : '本地服务未连接' }}</span>
+            <code v-if="runtime.connection">{{ runtime.connection.port }}</code>
+          </button>
+          <div class="window-controls" aria-label="窗口控制">
+            <button type="button" title="最小化" aria-label="最小化" @click="minimizeWindow">
+              <Minus :size="16" :stroke-width="1.8" />
+            </button>
+            <button type="button" :title="isWindowMaximized ? '还原' : '最大化'" :aria-label="isWindowMaximized ? '还原' : '最大化'" @click="toggleMaximizeWindow">
+              <Copy v-if="isWindowMaximized" :size="13" :stroke-width="1.7" />
+              <Square v-else :size="12" :stroke-width="1.7" />
+            </button>
+            <button class="close-window" type="button" title="关闭" aria-label="关闭" @click="closeWindow">
+              <X :size="17" :stroke-width="1.7" />
+            </button>
+          </div>
+        </div>
       </header>
 
       <Transition name="banner-slide">

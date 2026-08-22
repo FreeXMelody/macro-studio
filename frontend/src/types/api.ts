@@ -30,7 +30,7 @@ export interface StepDto {
   value: string
   enabled: boolean
   wait_after: string
-  failure_policy: '' | 'stop' | 'skip' | 'retry_step' | 'previous_image'
+  failure_policy: '' | 'stop' | 'skip' | 'retry_step' | 'previous_image' | 'previous_click'
   failure_retries: number
   verify_target: string
 }

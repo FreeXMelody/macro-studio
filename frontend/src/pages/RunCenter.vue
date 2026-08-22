@@ -7,10 +7,12 @@ import {
   Clock3,
   ClipboardCheck,
   FilePlay,
+  Gauge,
   ListChecks,
   ListRestart,
   LoaderCircle,
   MonitorCog,
+  MousePointer2,
   Pause,
   Play,
   Repeat2,
@@ -200,25 +202,35 @@ async function confirmRealStart() {
         <div class="execution-mode" :class="{ real: runtime.executionMode === 'real' }" role="radiogroup" aria-label="运行方式">
           <button
             type="button"
+            role="radio"
+            :aria-checked="runtime.executionMode === 'simulation'"
             :class="{ active: runtime.executionMode === 'simulation' }"
             :disabled="runtime.isRunning"
             @click="runtime.executionMode = 'simulation'"
             title="加速检查动作顺序、变量、等待和日志，不向目标窗口发送输入"
           >
+            <Gauge :size="14" />
             加速演练
           </button>
           <button
             type="button"
+            role="radio"
+            :aria-checked="runtime.executionMode === 'real'"
             class="real-option"
             :class="{ active: runtime.executionMode === 'real' }"
             :disabled="runtime.isRunning"
             @click="runtime.executionMode = 'real'"
           >
-            实际
+            <MousePointer2 :size="14" />
+            实际执行
           </button>
         </div>
-        <label class="toggle-control" :class="{ active: runtime.loop }">
-          <input v-model="runtime.loop" type="checkbox" :disabled="runtime.isRunning" />
+        <label
+          class="toggle-control"
+          :class="{ active: runtime.loop && runtime.executionMode === 'real', unavailable: runtime.executionMode === 'simulation' }"
+          :title="runtime.executionMode === 'simulation' ? '加速演练固定运行一轮' : '循环运行当前队列'"
+        >
+          <input v-model="runtime.loop" type="checkbox" :disabled="runtime.isRunning || runtime.executionMode === 'simulation'" />
           <Repeat2 :size="16" />
           <span>循环</span>
         </label>
@@ -231,6 +243,7 @@ async function confirmRealStart() {
 
       <div class="transport-controls">
         <button
+          v-if="runtime.executionMode === 'real'"
           class="button secondary run-once-button"
           type="button"
           :disabled="!runtime.canStart || preflightChecking"
@@ -242,8 +255,9 @@ async function confirmRealStart() {
         </button>
         <button class="button primary start-button" type="button" :disabled="!runtime.canStart || preflightChecking" @click="requestStart(false)">
           <LoaderCircle v-if="runtime.commandPending || preflightChecking" class="spin" :size="17" />
+          <Gauge v-else-if="runtime.executionMode === 'simulation'" :size="17" />
           <Play v-else :size="17" fill="currentColor" />
-          {{ runtime.loop ? '开始循环' : '开始运行' }}
+          {{ runtime.executionMode === 'simulation' ? '演练一轮' : runtime.loop ? '开始循环' : '开始运行' }}
         </button>
         <Transition name="control-swap" mode="out-in">
           <button v-if="runtime.runner.status !== 'paused'" key="pause" class="button secondary" type="button" :disabled="!runtime.canPause" @click="runtime.pause">

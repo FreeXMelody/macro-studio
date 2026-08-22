@@ -17,7 +17,7 @@ class StepDto(ApiModel):
     value: str = ""
     enabled: bool = True
     wait_after: str = ""
-    failure_policy: Literal["", "stop", "skip", "retry_step", "previous_image"] = ""
+    failure_policy: Literal["", "stop", "skip", "retry_step", "previous_image", "previous_click"] = ""
     failure_retries: int = Field(default=2, ge=0, le=20)
     verify_target: str = ""
 

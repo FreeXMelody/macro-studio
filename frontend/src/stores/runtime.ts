@@ -181,11 +181,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
   async function start(options: { once?: boolean } = {}) {
     if (!client.value || !canStart.value) return
     await runCommand(async () => {
+      const simulation = executionMode.value === 'simulation'
       const response = await client.value!.start({
         active_group: selectedGroup.value,
-        loop: options.once ? false : loop.value,
+        loop: !simulation && !options.once && loop.value,
         random: random.value,
-        simulation: executionMode.value === 'simulation',
+        simulation,
       })
       applyRunnerStatus(response.status, response.mode)
     })
@@ -211,7 +212,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   async function stop() {
     if (!client.value || !canStop.value) return
-    await runCommand(async () => applyRunnerStatus((await client.value!.stop()).status))
+    const previousStatus = runner.value.status
+    applyRunnerStatus('stopping')
+    const succeeded = await runCommand(async () => applyRunnerStatus((await client.value!.stop()).status))
+    if (!succeeded) applyRunnerStatus(previousStatus)
   }
 
   async function refreshRunner() {
