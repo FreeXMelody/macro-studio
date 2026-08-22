@@ -6,6 +6,7 @@ import unittest
 
 from backend.application.stage_service import StageService
 from stage_api import DEFAULT_STAGE_API_CONFIG, StageWork
+from stage_diagnostics import DiagnosticReport
 
 
 class MemoryRepository:
@@ -79,6 +80,31 @@ class StageServiceTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "不受信任"):
             service.search("问爱", config)
+
+    def test_diagnostics_run_in_background_and_publish_a_structured_summary(self):
+        report = DiagnosticReport("cache", "game")
+        report.cache_files_seen = 14
+        report.method_candidates = ["openWork", "playAction"]
+        report.action_play_logs = ["play"]
+        report.notes = ["发现桥接候选"]
+
+        service = StageService(
+            MemoryRepository(),
+            diagnostic_runner=lambda: report,
+        )
+        state = service.start_diagnostics()
+        self.assertIn(state["status"], {"running", "completed"})
+
+        deadline = time.monotonic() + 2
+        while service.diagnostics_state()["status"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        state = service.diagnostics_state()
+        self.assertEqual(state["status"], "completed")
+        self.assertEqual(state["summary"]["cache_files_seen"], 14)
+        self.assertEqual(state["summary"]["method_candidates"], 2)
+        self.assertEqual(state["notes"], ["发现桥接候选"])
+        self.assertIn("Macro Studio 剧组诊断报告", state["report"])
 
     def test_capture_validates_and_saves_the_captured_request(self):
         repository = MemoryRepository()

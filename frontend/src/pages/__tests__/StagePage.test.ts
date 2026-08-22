@@ -37,6 +37,23 @@ const runtime = reactive({
     },
   ],
   stageCapture: null,
+  stageDiagnostics: {
+    status: 'completed',
+    message: '诊断完成',
+    summary: {
+      cache_files_seen: 12,
+      cache_hits: 3,
+      binary_hits: 2,
+      method_candidates: 4,
+      action_play_logs: 1,
+      qrcode_work_logs: 1,
+      voice_playback_logs: 0,
+    },
+    notes: ['发现桥接候选'],
+    report: 'Macro Studio 剧组诊断报告',
+    started_at: 1,
+    finished_at: 2,
+  },
   stageSearching: false,
   stageSaving: false,
   playlistSaving: false,
@@ -50,6 +67,8 @@ const runtime = reactive({
   parseStageRequest: vi.fn(),
   startStageCapture: vi.fn(),
   refreshStageCapture: vi.fn(),
+  startStageDiagnostics: vi.fn(),
+  refreshStageDiagnostics: vi.fn(async () => runtime.stageDiagnostics),
   loadStageCover: vi.fn(),
   savePlaylists: vi.fn(async (document) => document),
 })
@@ -84,6 +103,18 @@ describe('StagePage', () => {
       duration_seconds: 30,
       buffer_seconds: 5,
     })
+    wrapper.unmount()
+  })
+
+  it('opens the asynchronous diagnostics report panel', async () => {
+    const wrapper = mount(StagePage, { attachTo: document.body })
+
+    await wrapper.get('button[title="高级诊断"]').trigger('click')
+
+    expect(wrapper.get('.stage-diagnostics-dialog').text()).toContain('诊断完成')
+    expect(wrapper.get('.stage-diagnostics-dialog').text()).toContain('发现桥接候选')
+    expect(wrapper.get('.stage-diagnostics-report').text()).toContain('Macro Studio 剧组诊断报告')
+    expect(runtime.refreshStageDiagnostics).toHaveBeenCalled()
     wrapper.unmount()
   })
 })

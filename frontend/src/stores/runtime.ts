@@ -30,6 +30,7 @@ import type {
   StageCaptureState,
   StageConfigDto,
   StageDocumentDto,
+  StageDiagnosticsState,
   StageWorkDto,
 } from '../types/api'
 
@@ -47,6 +48,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const stage = ref<StageDocumentDto | null>(null)
   const stageWorks = ref<StageWorkDto[]>([])
   const stageCapture = ref<StageCaptureState | null>(null)
+  const stageDiagnostics = ref<StageDiagnosticsState | null>(null)
   const stageSearching = ref(false)
   const stageSaving = ref(false)
   const runner = ref<RunnerStateResponse>({ status: 'idle', active: false, mode: 'simulation' })
@@ -418,6 +420,25 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return result
   }
 
+  async function startStageDiagnostics(): Promise<StageDiagnosticsState> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    stageDiagnostics.value = await client.value.startStageDiagnostics()
+    appendLocalEvent('stage.diagnostics_started', { message: stageDiagnostics.value.message })
+    return stageDiagnostics.value
+  }
+
+  async function refreshStageDiagnostics(): Promise<StageDiagnosticsState> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    const previous = stageDiagnostics.value?.status
+    stageDiagnostics.value = await client.value.stageDiagnosticsState()
+    if (stageDiagnostics.value.status !== previous && ['completed', 'failed'].includes(stageDiagnostics.value.status)) {
+      appendLocalEvent('stage.diagnostics_' + stageDiagnostics.value.status, {
+        message: stageDiagnostics.value.message,
+      })
+    }
+    return stageDiagnostics.value
+  }
+
   async function loadStageCover(workId: number): Promise<Blob> {
     if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
     return client.value.stageCoverBlob(workId)
@@ -587,6 +608,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     stage,
     stageWorks,
     stageCapture,
+    stageDiagnostics,
     stageSearching,
     stageSaving,
     runner,
@@ -643,6 +665,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     searchStage,
     startStageCapture,
     refreshStageCapture,
+    startStageDiagnostics,
+    refreshStageDiagnostics,
     loadStageCover,
     saveSettings,
     probeWindow,

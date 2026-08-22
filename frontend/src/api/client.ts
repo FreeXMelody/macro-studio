@@ -23,6 +23,7 @@ import type {
   StageCaptureState,
   StageConfigDto,
   StageDocumentDto,
+  StageDiagnosticsState,
   StageSearchResponse,
 } from '../types/api'
 
@@ -191,6 +192,14 @@ export class MacroStudioClient {
 
   stageCaptureState(): Promise<StageCaptureState> {
     return this.request('/api/stage/capture')
+  }
+
+  startStageDiagnostics(): Promise<StageDiagnosticsState> {
+    return this.request('/api/stage/diagnostics', { method: 'POST' })
+  }
+
+  stageDiagnosticsState(): Promise<StageDiagnosticsState> {
+    return this.request('/api/stage/diagnostics')
   }
 
   stageCoverBlob(workId: number): Promise<Blob> {

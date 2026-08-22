@@ -311,6 +311,24 @@ class LocalApiTests(unittest.TestCase):
                 self.cover_id = work_id
                 return b"cover", "image/png"
 
+            def start_diagnostics(self):
+                return {
+                    "status": "running",
+                    "message": "扫描中",
+                    "summary": {},
+                    "notes": [],
+                    "report": "",
+                }
+
+            def diagnostics_state(self):
+                return {
+                    "status": "completed",
+                    "message": "诊断完成",
+                    "summary": {"cache_files_seen": 12, "method_candidates": 2},
+                    "notes": ["发现候选"],
+                    "report": "diagnostic report",
+                }
+
         stage = Stage()
         app, _catalog, _runner = self.make_stack(stage=stage)
         with TestClient(app) as client:
@@ -326,6 +344,8 @@ class LocalApiTests(unittest.TestCase):
                 },
             )
             cover = client.get("/api/stage/works/7/cover", headers=self.headers)
+            diagnostic_start = client.post("/api/stage/diagnostics", headers=self.headers)
+            diagnostic_state = client.get("/api/stage/diagnostics", headers=self.headers)
 
         self.assertEqual(document.status_code, 200)
         self.assertEqual(search.status_code, 200)
@@ -333,6 +353,9 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(stage.search_call, ("问爱", "1", 2, 4))
         self.assertEqual(cover.content, b"cover")
         self.assertEqual(cover.headers["content-type"], "image/png")
+        self.assertEqual(diagnostic_start.json()["status"], "running")
+        self.assertEqual(diagnostic_state.json()["summary"]["cache_files_seen"], 12)
+        self.assertEqual(diagnostic_state.json()["report"], "diagnostic report")
 
     def test_websocket_observes_complete_simulated_song_run(self):
         app, _catalog, runner = self.make_stack()

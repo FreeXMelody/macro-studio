@@ -16,6 +16,7 @@ from stage_api import (
     parse_stage_request_text,
     search_works,
 )
+from stage_diagnostics import run_stage_diagnostics
 from stage_http_listener import StageCaptureError, launch_elevated_capture
 
 
@@ -33,6 +34,7 @@ class StageService:
         duration_loader=fill_work_duration,
         byte_fetcher=fetch_bytes,
         capture_launcher=launch_elevated_capture,
+        diagnostic_runner=run_stage_diagnostics,
         emit_log=None,
     ):
         self.repository = repository
@@ -40,10 +42,12 @@ class StageService:
         self.duration_loader = duration_loader
         self.byte_fetcher = byte_fetcher
         self.capture_launcher = capture_launcher
+        self.diagnostic_runner = diagnostic_runner
         self.emit_log = emit_log or (lambda _message: None)
         self._lock = threading.RLock()
         self._works = {}
         self._capture = self._empty_capture()
+        self._diagnostics = self._empty_diagnostics()
 
     def document(self):
         data = self.repository.load()
@@ -187,9 +191,81 @@ class StageService:
             except OSError:
                 pass
 
+    def start_diagnostics(self):
+        with self._lock:
+            if self._diagnostics["status"] == "running":
+                return self.diagnostics_state()
+            self._diagnostics = {
+                **self._empty_diagnostics(),
+                "status": "running",
+                "message": "正在扫描 WebView 缓存、游戏模块和最近日志。",
+                "started_at": time.time(),
+            }
+        threading.Thread(
+            target=self._run_diagnostics,
+            name="stage-diagnostics",
+            daemon=True,
+        ).start()
+        return self.diagnostics_state()
+
+    def diagnostics_state(self):
+        with self._lock:
+            return {
+                "status": self._diagnostics["status"],
+                "message": self._diagnostics["message"],
+                "summary": dict(self._diagnostics["summary"]),
+                "notes": list(self._diagnostics["notes"]),
+                "report": self._diagnostics["report"],
+                "started_at": float(self._diagnostics["started_at"] or 0),
+                "finished_at": float(self._diagnostics["finished_at"] or 0),
+            }
+
+    def _run_diagnostics(self):
+        try:
+            report = self.diagnostic_runner()
+            summary = {
+                "cache_files_seen": int(report.cache_files_seen),
+                "cache_hits": len(report.cache_hits),
+                "binary_hits": len(report.binary_hits),
+                "method_candidates": len(report.method_candidates),
+                "action_play_logs": len(report.action_play_logs),
+                "qrcode_work_logs": len(report.qrcode_work_logs),
+                "voice_playback_logs": len(report.voice_playback_logs),
+            }
+            with self._lock:
+                self._diagnostics.update(
+                    status="completed",
+                    message="诊断完成。",
+                    summary=summary,
+                    notes=[str(note) for note in report.notes],
+                    report=report.to_text(),
+                    finished_at=time.time(),
+                )
+            self.emit_log("剧组站高级诊断已完成")
+        except Exception as exc:
+            with self._lock:
+                self._diagnostics.update(
+                    status="failed",
+                    message=f"诊断失败：{exc}",
+                    finished_at=time.time(),
+                )
+            self.emit_log("剧组站高级诊断失败")
+
     def _finish_capture(self, status, message):
         with self._lock:
             self._capture.update(status=status, message=str(message))
+
+    @staticmethod
+    def _empty_diagnostics():
+        return {
+            "status": "idle",
+            "message": "尚未运行诊断。",
+            "summary": {},
+            "notes": [],
+            "report": "",
+            "started_at": 0.0,
+            "finished_at": 0.0,
+        }
 
     @staticmethod
     def _empty_capture():

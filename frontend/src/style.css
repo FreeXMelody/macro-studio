@@ -3696,3 +3696,70 @@ body.workflow-is-dragging {
   .stage-config-panel label.wide { grid-column: span 2; }
   .stage-config-actions { grid-column: span 2; }
 }
+/* Stage diagnostics */
+.stage-diagnostics-backdrop { z-index: 145; padding: 24px; }
+.stage-diagnostics-dialog {
+  display: grid;
+  width: min(1120px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
+  min-height: 500px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid #394147;
+  border-radius: 7px;
+  background: #111517;
+  box-shadow: 0 24px 72px rgb(0 0 0 / 58%);
+}
+.stage-diagnostics-content {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(180px, 1fr);
+  gap: 12px;
+  padding: 14px 18px;
+  overflow: hidden;
+}
+.stage-diagnostics-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+.stage-diagnostics-summary > div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid #2f363b;
+  border-radius: 5px;
+  background: #171c1f;
+}
+.stage-diagnostics-summary span { color: #7e888f; font-size: 9px; }
+.stage-diagnostics-summary strong { color: #dfe5e8; font-size: 15px; }
+.stage-diagnostics-notes {
+  min-height: 0;
+  max-height: 130px;
+  padding: 10px 12px;
+  overflow: auto;
+  border-left: 3px solid #58bfa4;
+  background: #15201d;
+}
+.stage-diagnostics-notes > strong { color: #9fe0ce; font-size: 10px; }
+.stage-diagnostics-notes ul { display: grid; gap: 4px; margin: 7px 0 0; padding-left: 17px; color: #bec7c4; font-size: 10px; line-height: 1.5; }
+.stage-diagnostics-report {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 13px 14px;
+  overflow: auto;
+  border: 1px solid #2c3338;
+  border-radius: 5px;
+  color: #bcc5ca;
+  background: #0b0f11;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.stage-diagnostics-actions { justify-content: flex-end; }
+@media (max-width: 980px) {
+  .stage-diagnostics-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

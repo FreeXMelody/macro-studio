@@ -300,3 +300,23 @@ export interface StageCaptureState {
   works: StageWorkDto[]
   deadline: number
 }
+
+export interface StageDiagnosticsSummary {
+  cache_files_seen: number
+  cache_hits: number
+  binary_hits: number
+  method_candidates: number
+  action_play_logs: number
+  qrcode_work_logs: number
+  voice_playback_logs: number
+}
+
+export interface StageDiagnosticsState {
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  message: string
+  summary: StageDiagnosticsSummary
+  notes: string[]
+  report: string
+  started_at: number
+  finished_at: number
+}

@@ -7,14 +7,17 @@ import {
   Clapperboard,
   ClipboardPaste,
   Clock3,
+  Copy,
+  FileSearch,
   Heart,
   LoaderCircle,
+  Play,
   Radio,
-
   Save,
   Search,
   Star,
   UserRound,
+  X,
 } from '@lucide/vue'
 
 import AppSelect from '../components/AppSelect.vue'
@@ -40,10 +43,12 @@ const sortDescending = ref(true)
 const selectedWorkId = ref<number | null>(null)
 const targetGroup = ref('')
 const advancedOpen = ref(false)
+const diagnosticsOpen = ref(false)
 const localError = ref('')
 const notice = ref('')
 const coverUrls = ref<Record<number, string>>({})
 let captureTimer: number | undefined
+let diagnosticsTimer: number | undefined
 let coverGeneration = 0
 let autoCaptureAttempted = false
 const pageActive = ref(false)
@@ -70,6 +75,7 @@ const selectedWork = computed(
 const captureActive = computed(() =>
   ['listening', 'validating'].includes(runtime.stageCapture?.status || ''),
 )
+const diagnosticsRunning = computed(() => runtime.stageDiagnostics?.status === 'running')
 const captureTone = computed(() => {
   if (runtime.stageCapture?.status === 'completed') return 'success'
   if (runtime.stageCapture?.status === 'failed') return 'error'
@@ -135,14 +141,17 @@ onActivated(() => {
   pageActive.value = true
   maybeStartAutoCapture()
   if (captureActive.value) scheduleCapturePoll()
+  if (diagnosticsOpen.value && diagnosticsRunning.value) scheduleDiagnosticsPoll()
 })
 
 onDeactivated(() => {
   pageActive.value = false
   clearCaptureTimer()
+  clearDiagnosticsTimer()
 })
 onBeforeUnmount(() => {
   clearCaptureTimer()
+  clearDiagnosticsTimer()
   releaseCoverUrls()
 })
 
@@ -237,6 +246,65 @@ function clearCaptureTimer() {
   }
 }
 
+async function openDiagnostics() {
+  diagnosticsOpen.value = true
+  localError.value = ''
+  try {
+    const state = await runtime.refreshStageDiagnostics()
+    if (state.status === 'running') scheduleDiagnosticsPoll()
+  } catch (cause) {
+    localError.value = messageOf(cause, '无法读取诊断状态')
+  }
+}
+
+function closeDiagnostics() {
+  diagnosticsOpen.value = false
+  clearDiagnosticsTimer()
+}
+
+async function startDiagnostics() {
+  clearDiagnosticsTimer()
+  localError.value = ''
+  try {
+    const state = await runtime.startStageDiagnostics()
+    if (state.status === 'running') scheduleDiagnosticsPoll()
+  } catch (cause) {
+    localError.value = messageOf(cause, '无法启动高级诊断')
+  }
+}
+
+function scheduleDiagnosticsPoll() {
+  clearDiagnosticsTimer()
+  diagnosticsTimer = window.setTimeout(() => void pollDiagnostics(), 650)
+}
+
+async function pollDiagnostics() {
+  try {
+    const state = await runtime.refreshStageDiagnostics()
+    if (state.status === 'running') scheduleDiagnosticsPoll()
+  } catch (cause) {
+    localError.value = messageOf(cause, '读取诊断状态失败')
+  }
+}
+
+function clearDiagnosticsTimer() {
+  if (diagnosticsTimer !== undefined) {
+    window.clearTimeout(diagnosticsTimer)
+    diagnosticsTimer = undefined
+  }
+}
+
+async function copyDiagnosticReport() {
+  const report = runtime.stageDiagnostics?.report || ''
+  if (!report) return
+  try {
+    await navigator.clipboard.writeText(report)
+    notice.value = '诊断报告已复制'
+  } catch (cause) {
+    localError.value = messageOf(cause, '复制诊断报告失败')
+  }
+}
+
 async function addSelectedWork() {
   if (!selectedWork.value || !runtime.playlists || !targetGroup.value) return
   const document = JSON.parse(JSON.stringify(runtime.playlists)) as PlaylistDocumentDto
@@ -328,6 +396,9 @@ function messageOf(cause: unknown, fallback: string) {
       <button class="icon-button" type="button" title="重新监听游戏参数" :disabled="captureActive" @click="startCapture">
         <LoaderCircle v-if="captureActive" class="spin" :size="17" />
         <Radio v-else :size="17" />
+      </button>
+      <button class="icon-button" type="button" title="高级诊断" :class="{ active: diagnosticsOpen }" @click="openDiagnostics">
+        <FileSearch :size="17" />
       </button>
       <button class="icon-button" type="button" title="接口配置" :class="{ active: advancedOpen }" @click="advancedOpen = !advancedOpen">
         <ChevronDown :size="17" :class="{ 'rotate-half': advancedOpen }" />
@@ -425,5 +496,46 @@ function messageOf(cause: unknown, fallback: string) {
         加入队列
       </button>
     </footer>
+
+    <div v-if="diagnosticsOpen" class="dialog-backdrop stage-diagnostics-backdrop" @mousedown.self="closeDiagnostics">
+      <section class="stage-diagnostics-dialog" role="dialog" aria-modal="true" aria-label="剧组站高级诊断">
+        <header class="dialog-header">
+          <div class="dialog-title-wrap">
+            <span class="dialog-icon"><FileSearch :size="17" /></span>
+            <div><h2>高级诊断</h2><p>{{ runtime.stageDiagnostics?.message || '尚未运行诊断' }}</p></div>
+          </div>
+          <button class="icon-button small" type="button" title="关闭" @click="closeDiagnostics"><X :size="16" /></button>
+        </header>
+
+        <div class="stage-diagnostics-content">
+          <div class="stage-diagnostics-summary">
+            <div><span>缓存文件</span><strong>{{ runtime.stageDiagnostics?.summary.cache_files_seen || 0 }}</strong></div>
+            <div><span>缓存命中</span><strong>{{ runtime.stageDiagnostics?.summary.cache_hits || 0 }}</strong></div>
+            <div><span>模块命中</span><strong>{{ runtime.stageDiagnostics?.summary.binary_hits || 0 }}</strong></div>
+            <div><span>候选方法</span><strong>{{ runtime.stageDiagnostics?.summary.method_candidates || 0 }}</strong></div>
+            <div><span>动作日志</span><strong>{{ runtime.stageDiagnostics?.summary.action_play_logs || 0 }}</strong></div>
+            <div><span>二维码日志</span><strong>{{ runtime.stageDiagnostics?.summary.qrcode_work_logs || 0 }}</strong></div>
+          </div>
+
+          <div v-if="runtime.stageDiagnostics?.notes.length" class="stage-diagnostics-notes">
+            <strong>结论</strong>
+            <ul><li v-for="note in runtime.stageDiagnostics.notes" :key="note">{{ note }}</li></ul>
+          </div>
+
+          <pre class="stage-diagnostics-report">{{ runtime.stageDiagnostics?.report || '尚未生成报告。' }}</pre>
+        </div>
+
+        <footer class="dialog-actions stage-diagnostics-actions">
+          <button class="button secondary" type="button" :disabled="!runtime.stageDiagnostics?.report" @click="copyDiagnosticReport">
+            <Copy :size="14" />复制报告
+          </button>
+          <button class="button primary" type="button" :disabled="diagnosticsRunning" @click="startDiagnostics">
+            <LoaderCircle v-if="diagnosticsRunning" class="spin" :size="15" />
+            <Play v-else :size="15" />
+            {{ diagnosticsRunning ? '诊断中' : '开始诊断' }}
+          </button>
+        </footer>
+      </section>
+    </div>
   </main>
 </template>

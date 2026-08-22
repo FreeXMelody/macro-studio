@@ -41,6 +41,7 @@ from backend.transport.contracts import (
     StageCaptureStartRequest,
     StageCaptureStateResponse,
     StageDocumentDto,
+    StageDiagnosticsStateResponse,
     StageParseRequest,
     StageSearchRequest,
     StageSearchResponse,
@@ -322,6 +323,14 @@ def create_app(
     @app.get("/api/stage/capture", response_model=StageCaptureStateResponse, dependencies=authorized)
     def get_stage_capture():
         return require_capability(stage, "剧组站服务不可用").capture_state()
+
+    @app.post("/api/stage/diagnostics", response_model=StageDiagnosticsStateResponse, dependencies=authorized)
+    def start_stage_diagnostics():
+        return require_capability(stage, "剧组站服务不可用").start_diagnostics()
+
+    @app.get("/api/stage/diagnostics", response_model=StageDiagnosticsStateResponse, dependencies=authorized)
+    def get_stage_diagnostics():
+        return require_capability(stage, "剧组站服务不可用").diagnostics_state()
 
     @app.get("/api/stage/works/{work_id}/cover", dependencies=authorized)
     def get_stage_cover(work_id: int):

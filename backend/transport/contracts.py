@@ -334,6 +334,26 @@ class StageCaptureStateResponse(ApiModel):
     deadline: float = 0
 
 
+class StageDiagnosticsSummaryDto(ApiModel):
+    cache_files_seen: int = 0
+    cache_hits: int = 0
+    binary_hits: int = 0
+    method_candidates: int = 0
+    action_play_logs: int = 0
+    qrcode_work_logs: int = 0
+    voice_playback_logs: int = 0
+
+
+class StageDiagnosticsStateResponse(ApiModel):
+    status: Literal["idle", "running", "completed", "failed"]
+    message: str
+    summary: StageDiagnosticsSummaryDto = Field(default_factory=StageDiagnosticsSummaryDto)
+    notes: list[str] = Field(default_factory=list)
+    report: str = ""
+    started_at: float = 0
+    finished_at: float = 0
+
+
 class HealthResponse(ApiModel):
     status: str = "ok"
     api_version: str
