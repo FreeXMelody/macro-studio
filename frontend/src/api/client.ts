@@ -20,6 +20,10 @@ import type {
   PreflightResponse,
   StepDto,
   SongDto,
+  StageCaptureState,
+  StageConfigDto,
+  StageDocumentDto,
+  StageSearchResponse,
 } from '../types/api'
 
 const SESSION_HEADER = 'X-Macro-Studio-Token'
@@ -154,6 +158,43 @@ export class MacroStudioClient {
       method: 'POST',
       body: JSON.stringify({ target }),
     })
+  }
+
+  stage(): Promise<StageDocumentDto> {
+    return this.request('/api/stage')
+  }
+
+  updateStage(document: StageDocumentDto): Promise<StageDocumentDto> {
+    return this.request('/api/stage', { method: 'PUT', body: JSON.stringify(document) })
+  }
+
+  parseStageRequest(text: string): Promise<StageDocumentDto> {
+    return this.request('/api/stage/parse', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    })
+  }
+
+  searchStage(keyword: string, config: StageConfigDto, page = 1): Promise<StageSearchResponse> {
+    return this.request('/api/stage/search', {
+      method: 'POST',
+      body: JSON.stringify({ keyword, config, page, duration_limit: 12 }),
+    })
+  }
+
+  startStageCapture(timeout = 90): Promise<StageCaptureState> {
+    return this.request('/api/stage/capture', {
+      method: 'POST',
+      body: JSON.stringify({ timeout }),
+    })
+  }
+
+  stageCaptureState(): Promise<StageCaptureState> {
+    return this.request('/api/stage/capture')
+  }
+
+  stageCoverBlob(workId: number): Promise<Blob> {
+    return this.assetBlob('/api/stage/works/' + workId + '/cover', '作品封面')
   }
 
   settings(): Promise<TargetSettingsDto> {

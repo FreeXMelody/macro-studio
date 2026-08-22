@@ -270,6 +270,70 @@ class PreflightResponse(ApiModel):
     checks: list[PreflightCheckDto]
     window: WindowProbeResponse
 
+class StageConfigDto(ApiModel):
+    base_url: str
+    role_id: str = ""
+    user_id: str = ""
+    skey: str = ""
+    sort: str = ""
+    page_size: str = "20"
+    contents: str = ""
+    sub_types: str = ""
+    actor_count_contents: str = ""
+    work_filter: Literal["single", "all", "multi", "movie"] = "single"
+
+
+class StageDocumentDto(ApiModel):
+    config: StageConfigDto
+    keyword: str = ""
+
+
+class StageParseRequest(ApiModel):
+    text: str
+
+
+class StageSearchRequest(ApiModel):
+    keyword: str
+    page: int = Field(default=1, ge=1, le=100)
+    duration_limit: int = Field(default=12, ge=0, le=100)
+    config: StageConfigDto | None = None
+
+
+class StageWorkDto(ApiModel):
+    work_id: int
+    name: str
+    summary: str = ""
+    designer_name: str = ""
+    hot: int = 0
+    like_count: int = 0
+    collect_count: int = 0
+    cover_url: str = ""
+    category_label: str = ""
+    work_type: int = 0
+    sub_type: int = 0
+    actor_count: int = 0
+    duration_seconds: int = 0
+
+
+class StageSearchResponse(ApiModel):
+    keyword: str
+    page: int
+    works: list[StageWorkDto]
+
+
+class StageCaptureStartRequest(ApiModel):
+    timeout: int = Field(default=90, ge=15, le=180)
+
+
+class StageCaptureStateResponse(ApiModel):
+    status: Literal["idle", "listening", "validating", "completed", "failed"]
+    message: str
+    keyword: str = ""
+    config: StageConfigDto | None = None
+    works: list[StageWorkDto] = Field(default_factory=list)
+    deadline: float = 0
+
+
 class HealthResponse(ApiModel):
     status: str = "ok"
     api_version: str

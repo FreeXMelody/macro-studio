@@ -29,7 +29,7 @@ class FakeExecutor:
 class LocalApiTests(unittest.TestCase):
     TOKEN = "test-session-token"
 
-    def make_stack(self, save_playlists=None, save_presets=None, step_seconds=0.001, executor=None, settings=None, window_inspector=None, point_preview=None):
+    def make_stack(self, save_playlists=None, save_presets=None, step_seconds=0.001, executor=None, settings=None, window_inspector=None, point_preview=None, stage=None):
         song = Song(
             title="问爱",
             keyword="问爱",
@@ -69,6 +69,7 @@ class LocalApiTests(unittest.TestCase):
             settings=settings,
             window_inspector=window_inspector,
             point_preview=point_preview,
+            stage=stage,
         )
         return app, catalog, runner
 
@@ -275,6 +276,64 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "showing")
         self.assertEqual(calls, [("播放", 1280, 720, 2.2)])
+    def test_stage_endpoints_forward_typed_documents_and_cover_bytes(self):
+        class Stage:
+            def document(self):
+                return {
+                    "config": {
+                        "base_url": "http://hapi.hi.163.com/nshm/action-station/work/list/search",
+                        "role_id": "1",
+                        "user_id": "2",
+                        "skey": "secret",
+                        "work_filter": "single",
+                    },
+                    "keyword": "问爱",
+                }
+
+            def search(self, keyword, config, page, duration_limit):
+                self.search_call = (keyword, config["role_id"], page, duration_limit)
+                return {
+                    "keyword": keyword,
+                    "page": page,
+                    "works": [
+                        {
+                            "work_id": 7,
+                            "name": "问爱",
+                            "designer_name": "期迷",
+                            "cover_url": "https://cdn.example/cover.png",
+                            "category_label": "单人",
+                            "duration_seconds": 30,
+                        }
+                    ],
+                }
+
+            def cover(self, work_id):
+                self.cover_id = work_id
+                return b"cover", "image/png"
+
+        stage = Stage()
+        app, _catalog, _runner = self.make_stack(stage=stage)
+        with TestClient(app) as client:
+            document = client.get("/api/stage", headers=self.headers)
+            search = client.post(
+                "/api/stage/search",
+                headers=self.headers,
+                json={
+                    "keyword": "问爱",
+                    "page": 2,
+                    "duration_limit": 4,
+                    "config": document.json()["config"],
+                },
+            )
+            cover = client.get("/api/stage/works/7/cover", headers=self.headers)
+
+        self.assertEqual(document.status_code, 200)
+        self.assertEqual(search.status_code, 200)
+        self.assertEqual(search.json()["works"][0]["duration_seconds"], 30)
+        self.assertEqual(stage.search_call, ("问爱", "1", 2, 4))
+        self.assertEqual(cover.content, b"cover")
+        self.assertEqual(cover.headers["content-type"], "image/png")
+
     def test_websocket_observes_complete_simulated_song_run(self):
         app, _catalog, runner = self.make_stack()
         with TestClient(app) as client:

@@ -248,3 +248,55 @@ export interface PreflightResponse {
   checks: PreflightCheckDto[]
   window: WindowProbeResponse
 }
+
+
+export type StageWorkFilter = 'single' | 'all' | 'multi' | 'movie'
+
+export interface StageConfigDto {
+  base_url: string
+  role_id: string
+  user_id: string
+  skey: string
+  sort: string
+  page_size: string
+  contents: string
+  sub_types: string
+  actor_count_contents: string
+  work_filter: StageWorkFilter
+}
+
+export interface StageDocumentDto {
+  config: StageConfigDto
+  keyword: string
+}
+
+export interface StageWorkDto {
+  work_id: number
+  name: string
+  summary: string
+  designer_name: string
+  hot: number
+  like_count: number
+  collect_count: number
+  cover_url: string
+  category_label: string
+  work_type: number
+  sub_type: number
+  actor_count: number
+  duration_seconds: number
+}
+
+export interface StageSearchResponse {
+  keyword: string
+  page: number
+  works: StageWorkDto[]
+}
+
+export interface StageCaptureState {
+  status: 'idle' | 'listening' | 'validating' | 'completed' | 'failed'
+  message: string
+  keyword: string
+  config: StageConfigDto | null
+  works: StageWorkDto[]
+  deadline: number
+}

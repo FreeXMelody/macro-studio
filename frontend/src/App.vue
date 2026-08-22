@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, Cable, Copy, ListMusic, Minus, ScanSearch, Settings, Square, Wifi, WifiOff, Workflow, X } from '@lucide/vue'
+import { Activity, Cable, Clapperboard, Copy, ListMusic, Minus, ScanSearch, Settings, Square, Wifi, WifiOff, Workflow, X } from '@lucide/vue'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRoute } from 'vue-router'
@@ -74,6 +74,10 @@ onBeforeUnmount(() => {
         <RouterLink class="nav-button" exact-active-class="active" to="/targets" title="目标库">
           <ScanSearch :size="20" />
           <span>目标</span>
+        </RouterLink>
+        <RouterLink class="nav-button" exact-active-class="active" to="/stage" title="剧组站">
+          <Clapperboard :size="20" />
+          <span>剧组</span>
         </RouterLink>
       </nav>
       <RouterLink class="nav-button settings-button" exact-active-class="active" to="/settings" title="目标程序设置">

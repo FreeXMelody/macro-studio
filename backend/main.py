@@ -12,6 +12,7 @@ from backend.application.runner_service import RunnerService
 from backend.application.run_plan_service import RunPlanService
 from backend.application.target_service import TargetService
 from backend.application.settings_service import SettingsService
+from backend.application.stage_service import StageService
 from backend.domain.runner import RunnerControl, RunnerEvent
 from backend.infrastructure.emergency_hotkey import EmergencyStopMonitor
 from backend.infrastructure.config_repository import ConfigRepository
@@ -132,6 +133,7 @@ def build_application(session_token=None, config_path=CONFIG_PATH, playlist_path
         base_dir=os.path.dirname(os.path.abspath(config_path)),
     )
     settings = SettingsService(config_repository)
+    stage = StageService(config_repository, emit_log=publish_log)
     window_inspector = TargetWindowInspector(config_provider=load_current_config)
     token = session_token or os.environ.get(SESSION_TOKEN_ENV) or secrets.token_urlsafe(32)
     return create_app(
@@ -148,6 +150,7 @@ def build_application(session_token=None, config_path=CONFIG_PATH, playlist_path
         settings=settings,
         window_inspector=window_inspector,
         run_plan=run_plan,
+        stage=stage,
     )
 
 

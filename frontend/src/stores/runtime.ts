@@ -27,6 +27,10 @@ import type {
   WindowProbeResponse,
   PreflightResponse,
   StepDto,
+  StageCaptureState,
+  StageConfigDto,
+  StageDocumentDto,
+  StageWorkDto,
 } from '../types/api'
 
 const MAX_EVENTS = 300
@@ -40,6 +44,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const targets = ref<TargetLibraryDto | null>(null)
   const settings = ref<TargetSettingsDto | null>(null)
   const settingsSaving = ref(false)
+  const stage = ref<StageDocumentDto | null>(null)
+  const stageWorks = ref<StageWorkDto[]>([])
+  const stageCapture = ref<StageCaptureState | null>(null)
+  const stageSearching = ref(false)
+  const stageSaving = ref(false)
   const runner = ref<RunnerStateResponse>({ status: 'idle', active: false, mode: 'simulation' })
   const runPlan = ref<RunPlanResponse | null>(null)
   const planChecking = ref(false)
@@ -133,12 +142,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
     const nextClient = new MacroStudioClient(nextConnection)
     client.value = nextClient
     try {
-      const [nextHealth, nextPlaylists, nextPresets, nextTargets, nextSettings, nextRunner] = await Promise.all([
+      const [nextHealth, nextPlaylists, nextPresets, nextTargets, nextSettings, nextStage, nextRunner] = await Promise.all([
         nextClient.health(),
         nextClient.playlists(),
         nextClient.presets(),
         nextClient.targets(),
         nextClient.settings(),
+        nextClient.stage(),
         nextClient.runner(),
       ])
       health.value = nextHealth
@@ -146,6 +156,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       presets.value = nextPresets
       targets.value = nextTargets
       settings.value = nextSettings
+      stage.value = nextStage
       runner.value = nextRunner
       executionMode.value = nextRunner.mode
       selectedGroup.value = nextPlaylists.active_song_group || '全部'
@@ -344,6 +355,74 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
   }
 
+  async function saveStage(document: StageDocumentDto): Promise<StageDocumentDto> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    stageSaving.value = true
+    try {
+      const saved = await client.value.updateStage(document)
+      stage.value = saved
+      return saved
+    } finally {
+      stageSaving.value = false
+    }
+  }
+
+  async function parseStageRequest(text: string): Promise<StageDocumentDto> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    const parsed = await client.value.parseStageRequest(text)
+    stage.value = parsed
+    return parsed
+  }
+
+  async function searchStage(keyword: string, config: StageConfigDto): Promise<StageWorkDto[]> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    stageSearching.value = true
+    appendLocalEvent('stage.search_started', { keyword })
+    try {
+      const result = await client.value.searchStage(keyword, config)
+      stage.value = { config: { ...config }, keyword: result.keyword }
+      stageWorks.value = result.works
+      appendLocalEvent('stage.search_completed', {
+        keyword: result.keyword,
+        count: result.works.length,
+      })
+      return result.works
+    } catch (cause) {
+      appendLocalEvent('stage.search_failed', {
+        keyword,
+        error: errorMessage(cause, '剧组站搜索失败'),
+      })
+      throw cause
+    } finally {
+      stageSearching.value = false
+    }
+  }
+
+  async function startStageCapture(timeout = 90): Promise<StageCaptureState> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    stageCapture.value = await client.value.startStageCapture(timeout)
+    appendLocalEvent('stage.capture_started', { message: stageCapture.value.message })
+    return stageCapture.value
+  }
+
+  async function refreshStageCapture(): Promise<StageCaptureState> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    const result = await client.value.stageCaptureState()
+    const previous = stageCapture.value?.status
+    stageCapture.value = result
+    if (result.config) stage.value = { config: result.config, keyword: result.keyword }
+    if (result.status === 'completed') stageWorks.value = result.works
+    if (result.status !== previous && ['completed', 'failed'].includes(result.status)) {
+      appendLocalEvent('stage.capture_' + result.status, { message: result.message })
+    }
+    return result
+  }
+
+  async function loadStageCover(workId: number): Promise<Blob> {
+    if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
+    return client.value.stageCoverBlob(workId)
+  }
+
   async function saveSettings(document: TargetSettingsDto): Promise<TargetSettingsDto> {
     if (!client.value || !isConnected.value) throw new Error('本地服务未连接')
     settingsSaving.value = true
@@ -505,6 +584,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     presets,
     targets,
     settings,
+    stage,
+    stageWorks,
+    stageCapture,
+    stageSearching,
+    stageSaving,
     runner,
     runPlan,
     planChecking,
@@ -554,6 +638,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
     previewPoint,
     selectRegion,
     testImageTarget,
+    saveStage,
+    parseStageRequest,
+    searchStage,
+    startStageCapture,
+    refreshStageCapture,
+    loadStageCover,
     saveSettings,
     probeWindow,
     preflight,

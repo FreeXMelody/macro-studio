@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from backend.application.event_bus import EventBus
 from backend.application.runner_service import RunnerBusyError, RunnerService, RunnerUnavailableError
@@ -38,6 +38,12 @@ from backend.transport.contracts import (
     RunnerStartRequest,
     RunnerStateResponse,
     StepTestRequest,
+    StageCaptureStartRequest,
+    StageCaptureStateResponse,
+    StageDocumentDto,
+    StageParseRequest,
+    StageSearchRequest,
+    StageSearchResponse,
 )
 
 API_VERSION = "0.1.0"
@@ -67,6 +73,7 @@ def create_app(
     settings=None,
     window_inspector=None,
     run_plan=None,
+    stage=None,
 ):
     session_token = str(session_token or "")
     if not session_token:
@@ -119,6 +126,7 @@ def create_app(
     app.state.region_selector = region_selector
     app.state.vision_tester = vision_tester
     app.state.run_plan = run_plan
+    app.state.stage = stage
     app.state.session_token = session_token
 
     def require_session(
@@ -275,6 +283,54 @@ def create_app(
     @app.get("/api/settings/preflight", response_model=PreflightResponse, dependencies=authorized)
     def preflight():
         return require_capability(window_inspector, "窗口诊断服务不可用").preflight()
+    @app.get("/api/stage", response_model=StageDocumentDto, dependencies=authorized)
+    def get_stage():
+        return require_capability(stage, "剧组站服务不可用").document()
+
+    @app.put("/api/stage", response_model=StageDocumentDto, dependencies=authorized)
+    def put_stage(document: StageDocumentDto):
+        try:
+            return require_capability(stage, "剧组站服务不可用").replace(
+                document.config.model_dump(), document.keyword
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+    @app.post("/api/stage/parse", response_model=StageDocumentDto, dependencies=authorized)
+    def parse_stage_request(payload: StageParseRequest):
+        try:
+            return require_capability(stage, "剧组站服务不可用").parse_request(payload.text)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+    @app.post("/api/stage/search", response_model=StageSearchResponse, dependencies=authorized)
+    def search_stage(payload: StageSearchRequest):
+        try:
+            return require_capability(stage, "剧组站服务不可用").search(
+                payload.keyword,
+                payload.config.model_dump() if payload.config else None,
+                page=payload.page,
+                duration_limit=payload.duration_limit,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+    @app.post("/api/stage/capture", response_model=StageCaptureStateResponse, dependencies=authorized)
+    def start_stage_capture(payload: StageCaptureStartRequest):
+        return require_capability(stage, "剧组站服务不可用").start_capture(payload.timeout)
+
+    @app.get("/api/stage/capture", response_model=StageCaptureStateResponse, dependencies=authorized)
+    def get_stage_capture():
+        return require_capability(stage, "剧组站服务不可用").capture_state()
+
+    @app.get("/api/stage/works/{work_id}/cover", dependencies=authorized)
+    def get_stage_cover(work_id: int):
+        try:
+            content, media_type = require_capability(stage, "剧组站服务不可用").cover(work_id)
+            return Response(content=content, media_type=media_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
     @app.get("/api/runner", response_model=RunnerStateResponse, dependencies=authorized)
     def get_runner():
         return RunnerStateResponse(
